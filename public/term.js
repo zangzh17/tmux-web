@@ -1328,6 +1328,33 @@
   document.getElementById('fs-').addEventListener('click', () => applyFont(fs - 1));
   document.getElementById('fs+').addEventListener('click', () => applyFont(fs + 1));
 
+  // ---- desktop: draw the screen on a canvas
+  // ttyd is started with rendererType=dom. The DOM renderer lays a row out with the browser's own text flow and only corrects
+  // each run's width with a letter-spacing computed from a measurement; a glyph that the font (or its fallback) draws wider or
+  // narrower than that measurement (fullwidth punctuation, ❯ ● ⏸ ✻ …, all over Claude's screen) pushes the rest of the row off
+  // the cell grid. A drag selection works on the grid, so it then starts a character late or early and ends away from the
+  // pointer. The canvas renderer puts every glyph in its own cell, so what you see is what the grid selects. It is xterm.js's own
+  // addon (vendor/xterm-addon-canvas.js, @xterm/addon-canvas 0.7.0, which pairs with the xterm 5.4/5.5 core inside ttyd 1.7.7; the older
+  // xterm-addon-canvas 0.5 throws on it), run inside the terminal's
+  // document. Phones keep the DOM renderer, and so does a desktop that sets localStorage tmuxweb.renderer to "dom".
+  function loadCanvasRenderer() {
+    if (store.get('renderer') === 'dom') return;
+    const attach = () => {
+      try {
+        w.term.loadAddon(new w.CanvasAddon.CanvasAddon());
+        w.term.refresh(0, w.term.rows - 1);
+        layoutTerminal();
+      } catch { /* the DOM renderer stays */ }
+    };
+    try {
+      if (w.CanvasAddon) { attach(); return; }
+      const script = w.document.createElement('script');
+      script.src = new URL('vendor/xterm-addon-canvas.js?v=0.7.0', document.baseURI).href;
+      script.onload = attach;
+      w.document.head.appendChild(script);
+    } catch { /* the DOM renderer stays */ }
+  }
+
   // ---- wire up once ttyd has created the terminal
   function setup() {
     const doc = w.document;
@@ -1348,6 +1375,7 @@
     const box = doc.getElementById('terminal-container');
     if (box) box.style.touchAction = 'none';
     applyFont(fs);
+    if (!coarse) loadCanvasRenderer();
     w.term.onCursorMove(() => scheduleCheck(900));
     if (readOnly) w.term.options.disableStdin = true;
     else if (!coarse) w.term.focus();

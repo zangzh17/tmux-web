@@ -183,6 +183,18 @@ The API service needs `systemd/tmux-web-api.service.d/session-lifetime.conf` ins
 `systemctl --user daemon-reload`. Its `KillMode=process` keeps a tmux server spawned by the API
 running across API restarts; the systemd default would terminate every session in that process group.
 
+## Desktop notes
+
+* **Selecting text** while tmux or Claude Code has mouse tracking on: hold Option (Mac) or Shift (elsewhere) and drag; that forces
+  xterm.js's own selection instead of sending the mouse to the program.
+* The screen is drawn on a **canvas** (xterm.js's canvas addon, `public/vendor/xterm-addon-canvas.js`, loaded into the terminal page),
+  not with ttyd's `rendererType=dom` text layout. The DOM renderer lays a row out with the browser's own text flow and corrects each
+  run's width with a letter-spacing computed from a measurement; a glyph drawn wider or narrower than measured (fullwidth
+  punctuation, `❯ ● ⏸ ✻` and the like, all over Claude's screen) pushed the rest of the row off the cell grid, so a drag selection
+  started a character late or early (the first character "eaten") and ended away from the pointer. On a canvas every glyph sits in its
+  own cell. Phones keep the DOM renderer; `localStorage.setItem('tmuxweb.renderer', 'dom')` switches a desktop back.
+  The addon must pair with the xterm.js inside ttyd (`@xterm/addon-canvas` 0.7.0 for ttyd 1.7.7; 0.5 throws on it): re-test after a ttyd upgrade.
+
 ## Phone notes
 
 * Key bar: Esc, the commands key (`>_`), Clear (Ctrl+U), arrows, PgUp, PgDn, Tab, |, /, ~, Enter (last).
