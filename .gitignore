@@ -1,0 +1,6 @@
+node_modules/
+*.deploy-*
+*.log
+# the real users file lives in ~/.config/tmux-web/ (users.example.json is the template)
+users.json
+.env

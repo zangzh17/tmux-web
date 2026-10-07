@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0e14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Tmux sessions</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="app.css?v=20261007-list-1">
+</head>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <h1>Tmux sessions</h1>
+      <p class="muted" id="host"></p>
+      <p class="muted" id="whoami" hidden></p>
+    </div>
+    <button class="icon-btn" id="refresh" type="button" aria-label="Refresh sessions" title="Refresh sessions">⟳</button>
+  </header>
+  <form class="create" id="create">
+    <label for="session-name">New tmux session</label>
+    <div class="create-row">
+      <input id="session-name" name="name" type="text" maxlength="48" pattern="[A-Za-z0-9][A-Za-z0-9_\-]*" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="e.g. project" required aria-describedby="name-hint">
+      <button id="create-button" type="submit">Create &amp; open</button>
+    </div>
+    <p class="hint muted" id="name-hint">Start with an English letter or number. Use letters, numbers, - or _, up to 48 characters.</p>
+    <p class="create-error" id="create-error" role="alert" hidden></p>
+  </form>
+  <section class="preview-controls" aria-label="Session preview settings">
+    <span class="preview-label" id="preview-label">Preview lines</span>
+    <div class="preview-options" id="preview-options" role="group" aria-labelledby="preview-label">
+      <button type="button" data-lines="0" aria-pressed="false">No preview</button>
+      <button type="button" data-lines="1" aria-pressed="false">1</button>
+      <button type="button" data-lines="2" aria-pressed="false">2</button>
+      <button type="button" data-lines="5" aria-pressed="false">5</button>
+      <button type="button" data-lines="7" aria-pressed="true">7</button>
+      <button type="button" data-lines="10" aria-pressed="false">10</button>
+      <button type="button" data-lines="15" aria-pressed="false">15</button>
+      <button type="button" data-lines="20" aria-pressed="false">20</button>
+      <button type="button" data-lines="30" aria-pressed="false">30</button>
+      <button type="button" data-lines="50" aria-pressed="false">50</button>
+    </div>
+  </section>
+  <section class="preview-controls owner-filter" id="owner-filter" aria-label="Whose sessions to show" hidden>
+    <span class="preview-label" id="owner-label">Show sessions from</span>
+    <div class="preview-options" id="owner-options" role="group" aria-labelledby="owner-label"></div>
+  </section>
+  <div class="notice" id="notice" role="alert" hidden></div>
+  <ul class="list" id="list" aria-live="polite"><li class="skeleton"></li><li class="skeleton"></li></ul>
+  <p class="foot muted">Click a session to open it. Going back or closing this page keeps it running. Use the pencil to rename a session, or Close and confirm to end it.</p>
+</main>
+<dialog id="rename-dialog" aria-labelledby="rename-heading" aria-describedby="rename-hint">
+  <h2 id="rename-heading">Rename session</h2>
+  <form id="rename-form" novalidate>
+    <input id="rename-input" type="text" maxlength="48" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" aria-label="New session name" aria-describedby="rename-hint">
+    <p id="rename-hint">Start with a letter or number. Letters, numbers, spaces, - and _ are allowed, up to 48 characters.</p>
+    <p id="rename-error" role="alert" hidden></p>
+    <div class="dialog-actions">
+      <button id="rename-cancel" type="button">Cancel</button>
+      <button id="rename-save" class="primary" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="close-dialog" aria-labelledby="close-heading" aria-describedby="close-description">
+  <h2 id="close-heading">Close this session?</h2>
+  <p id="close-description">This will end “<span id="close-name"></span>”<span id="close-owner"></span> and all its windows and running programs.</p>
+  <p id="close-error" role="alert" hidden></p>
+  <div class="dialog-actions">
+    <button id="close-cancel" type="button" autofocus>Cancel</button>
+    <button id="close-confirm" class="confirm" type="button">Close session</button>
+  </div>
+</dialog>
+<script src="index.js?v=20261007-list-1"></script>
+</body>
+</html>

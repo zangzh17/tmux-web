@@ -1,0 +1,17 @@
+# Example user unit. Adjust the paths (%h is your home): the project checkout and where ttyd lives.
+[Unit]
+Description=tmux-web: ttyd serving `tmux attach` on a private Unix socket
+
+[Service]
+Type=simple
+Environment=LANG=en_US.UTF-8
+ExecStartPre=/usr/bin/install -d -m 0700 %t/tmux-web
+ExecStartPre=/usr/bin/rm -f %t/tmux-web/ttyd.sock
+ExecStart=%h/.local/bin/ttyd -W -a -O -P 20 -i %t/tmux-web/ttyd.sock -b /term -T xterm-256color \
+  -t rendererType=dom -t disableLeaveAlert=true -t disableResizeOverlay=true -t cursorBlink=true \
+  %h/tmux-web/bin/tmux-web-attach
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,15 @@
+# Example user unit. Install systemd/tmux-web-api.service.d/session-lifetime.conf next to it (see README).
+[Unit]
+Description=tmux-web: Cloudflare Access JWT check + tmux session API (Unix socket)
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/tmux-web/env
+Environment=TMUX_WEB_API_SOCK=%t/tmux-web/api.sock
+ExecStartPre=/usr/bin/install -d -m 0700 %t/tmux-web
+ExecStart=/usr/bin/env node %h/tmux-web/server.mjs
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

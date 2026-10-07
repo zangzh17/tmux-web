@@ -1,0 +1,36 @@
+# Front door for tmux-web. Binds loopback only; cloudflared points here.
+# Every request must carry a valid Cloudflare Access JWT (checked by server.mjs).
+# ttyd and the API sit on Unix sockets in a 0700 dir, so other local users
+# cannot reach them directly.
+{
+	auto_https off
+	admin off
+}
+
+:{$TMUX_WEB_PORT:8890} {
+	bind 127.0.0.1
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	route {
+		forward_auth unix/{$TMUX_WEB_RUNTIME}/api.sock {
+			uri /verify
+		}
+		handle /api/* {
+			reverse_proxy unix/{$TMUX_WEB_RUNTIME}/api.sock
+		}
+		handle /term/* {
+			reverse_proxy unix/{$TMUX_WEB_RUNTIME}/ttyd.sock
+		}
+		handle {
+			header Cache-Control no-cache
+			root * {$TMUX_WEB_PUBLIC}
+			file_server
+		}
+	}
+}

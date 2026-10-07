@@ -1,0 +1,8 @@
+{
+  "unowned": "viewers",
+  "users": {
+    "owner@example.com": { "name": "Owner", "manageOthers": "all" },
+    "alice@example.com": { "name": "Alice", "viewOthers": ["bob@example.com"] },
+    "bob@example.com": {}
+  }
+}

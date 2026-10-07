@@ -1,0 +1,237 @@
+# tmux-web
+
+Open the site (desktop or phone) -> create a named tmux session or tap an existing one to attach. The pencil on a list card
+renames that session (a dialog; the same rules and request as renaming from inside it), **Close** ends it after a confirmation.
+Returning to the list removes the terminal iframe and detaches that browser client. Closing the terminal page also
+disconnects it (the ttyd ping handles abrupt network loss). The tmux session keeps running.
+Inside a session, tap its title to edit the name; Enter or blur saves automatically, and Escape cancels.
+**Read** (book icon) opens a read-only reading view with native scrolling, wrapping and text selection; the live terminal
+keeps running underneath. **Plain text** (document icon, next to it) opens the same view as raw text (below). On a phone the
+header buttons are icons only and always stay on one row; the toolbar of the view is icons too: Render (eye), Plain text,
+Refresh, Done (✕). It exists because the live terminal has no usable history for Claude Code (it runs on tmux's
+alternate screen, so `history_size` is 0, and it draws at the width it had when it printed).
+
+**Opening a session that runs Claude starts in this view**, with Render on: the page checks the foreground command (and, failing
+that, whether the pane has a transcript) every time it is opened, and opens the conversation by itself. ✕ (Done) returns to the
+terminal and it stays there until the page is opened again; a plain shell opens in the terminal as before.
+
+* In a pane running Claude Code (`pane_current_command` matches `TMUX_WEB_CLAUDE_COMMAND`) it shows the **conversation**,
+  rebuilt from **that pane's own** transcript file: Claude Code records every running instance in `~/.claude/sessions/<pid>.json`
+  (its current `sessionId`, which follows `/clear` and `--resume`, and `tmux: "<session>:<window id>.<pane id>"`), and the pane's
+  conversation is `~/.claude/projects/<cwd with non-alphanumerics as "-">/<sessionId>.jsonl`. (Taking "the newest file in the
+  directory" instead made two Claude panes in one directory show each other's conversation.) A record only counts when its process
+  runs under this pane, and a pane whose conversation has no file yet shows none rather than someone else's; a Claude that keeps
+  no such record falls back to the newest file of the directory:
+  your messages as bubbles with their time, Claude's replies rendered as Markdown (code highlighting, LaTeX math, tables),
+  and consecutive tool calls/results folded into one `N steps · Bash ×2 · Read` capsule (red if a result failed; expand for
+  the command and a folded result). Slash commands, `/compact` summaries and interruptions get their own small markers.
+  It opens at the newest message; scroll up to load earlier ones (150 at a time), tap **Refresh** for new ones.
+  **Render** is on every time Read opens; the eye button switches Markdown/math/highlighting off for the view that is open.
+* **Plain text** shows the same conversation as one run of raw text in a monospace font: your messages and Claude's replies
+  exactly as written (Markdown source, one line per paragraph, so nothing is hard-wrapped at the terminal's width), speaker
+  lines `You · 14:02` / `Claude`, tool calls as one `[Bash] command` line each, failed tool results as `✗ first line`
+  (successful tool output is left out; use Read for it), slash commands, `/compact` summaries and interruptions. Selecting
+  everything copies exactly what is on screen. It opens at the newest message and scrolling up loads earlier ones
+  automatically (150 at a time), like Read. The toolbar's document icon switches between the two views without closing.
+  In a pane that is not Claude it shows the tmux scrollback, as Read does.
+* **You can answer from here.** In a Claude conversation a message box sits under the text. On a computer Enter sends and
+  Shift+Enter starts a new line; on a phone Enter is a new line and **Send** sends. Your message shows dimmed
+  ("Sending…") until Claude's transcript has it, and the answer streams in by itself (the view polls every 1–2.5 s while it is
+  open and the tab is visible). While Claude is running a one-line **Working…** row shows with **Stop** (sends Esc) and
+  **Screen** (opens Screen & keys; on narrow phones the row drops the words "Claude is" so it never wraps). If you have scrolled
+  up to read, new messages do not move you; a **↓ New messages** button appears instead, and nothing updates while you have
+  text selected. The terminal button next to the box opens **Screen & keys**: the pane's current screen plus Esc, ↑, ↓, Enter,
+  1, 2, 3, y, n, Tab, Shift+Tab and Clear, for permission prompts and menus that need a key rather than text. It opens by
+  itself when Claude asks for permission ("Do you want to proceed?"), and after a slash command that only draws on the
+  terminal (like `/cost`; such commands are not written to the transcript). If Claude exits, the box says so; **Refresh**
+  checks again. After **Stop** Claude Code puts the interrupted prompt back in its input box; the next message you send
+  replaces it rather than being glued onto it.
+* In any other pane it shows the tmux scrollback (up to 2000 lines, wrapped lines joined); if that is unavailable, the
+  current screen as xterm.js has it.
+* Copying is native: long-press text on a phone, adjust the handles and choose Copy; drag and Ctrl/Cmd+C on a computer.
+  There are no Copy buttons under the text. Code blocks have their own **Copy** button. Loading and error messages show in
+  a thin line under the heading only while there is something to say.
+  The keyboard stays hidden in this view. Tap ✕ to return, then tap the terminal when you want to type.
+On desktop, hold **Shift** while dragging to select terminal text (**Option** on Mac), then
+use **Ctrl/Cmd+C** or the toolbar's **Copy** button. With no text selected, Ctrl+C still interrupts
+the running program. Right-click opens one local **Copy / Paste / Select all** menu; it does not
+also open a tmux menu. Clipboard buttons use the browser clipboard, with a native-copy fallback.
+The session list has **Preview lines** buttons for no preview, 1, 2, 5, 7, 10, 15, 20, 30, or 50 lines.
+The default is 7, and the selection is remembered per browser. The API supplies up to the last 50 nonempty
+output lines, including recent scrollback when the terminal is short. Long lines are truncated within
+each card so they cannot expand the page past the screen width.
+The top-left control of the Read view is **Detach** (back to the session list; the session keeps running); ✕ closes only the view.
+The **Close** button on each list card and inside a session opens a confirmation dialog. Confirming ends that entire session,
+including its windows and running programs, and returns to the list.
+
+```
+browser ─► Cloudflare Access (login) ─► cloudflared tunnel ─► Caddy 127.0.0.1:8890
+                                                               ├─ forward_auth ─► server.mjs  (verifies Cf-Access-Jwt-Assertion)
+                                                               ├─ /api/*       ─► server.mjs  (tmux session management) [unix socket]
+                                                               ├─ /term/*      ─► ttyd        (xterm.js <-> pty)    [unix socket]
+                                                               └─ /            ─► public/     (list page + phone-friendly terminal page)
+```
+
+* ttyd 1.7.7 (`~/.local/bin/ttyd`) is the terminal engine. `bin/tmux-web-attach` attaches to an *existing*
+  session only. `POST /api/sessions` creates a detached session with a validated name (`[A-Za-z0-9][A-Za-z0-9_-]{0,47}`)
+  before the browser attaches. `PATCH /api/sessions/:id` renames an existing session; renamed titles
+  support Unicode letters/numbers, spaces, `-`, and `_`, up to 48 characters. `DELETE /api/sessions/:id`
+  requires explicit `confirmed: true` and ends only that session. Rename and close also require the
+  `instance` identity returned by the session API. All mutations require a valid Access JWT,
+  JSON, and a matching Origin. No endpoint accepts arbitrary tmux commands; `input` only sends text or an allow-listed key to a Claude pane.
+* Session links, the terminal connection, rename, and close use immutable tmux session IDs so a rename
+  keeps the terminal connected and reconnects correctly. Existing links containing only a name still resolve.
+  A server/birth identity also prevents an old tab from changing a new session that reuses an ID.
+* ttyd and the API listen on Unix sockets in `$XDG_RUNTIME_DIR/tmux-web` (mode 0700) so other local users
+  cannot reach them. Caddy binds loopback only and refuses anything without a valid Access JWT.
+* Read-only views (GET only, behind the same Access check): `GET /api/sessions/:id/history?lines=N` returns the pane's
+  scrollback; `GET /api/sessions/:id/transcript?before=I&count=N` (or `?after=I`) returns `{id, session, file, total, start, items}`
+  for the Claude conversation, where `items` is `[start, start+items.length)` of the append-only item list (indexes never
+  change within one `file`; a new file means a new conversation). Item kinds: user, assistant, tool, result, command,
+  notice, summary. Tool inputs are cut to 6 lines/400 chars and results to 40 lines/4000 chars. The transcript is parsed
+  incrementally and cached per file (only new bytes are read, only up to the last newline; 16 files, LRU), so a 260 MB
+  transcript costs about 1.5 s the first time and milliseconds afterwards.
+  `TMUX_WEB_CLAUDE_COMMAND` (regex, default `claude`, case-insensitive) says which panes count as Claude;
+  `TMUX_WEB_CLAUDE_PROJECTS` overrides `~/.claude/projects`.
+* `POST /api/sessions/:id/input` types into the session's Claude pane: `{instance, text}` or `{instance, key}`. It needs the
+  same Access token, matching Origin, JSON body and session `instance` as rename/close, and it refuses (409) any pane that is
+  not running Claude, so it cannot be used as a general way to type into a shell. `text` is control-character-stripped (so pasted
+  text can never contain the bracketed-paste end marker), limited to 20000 characters, pasted with `tmux paste-buffer -p -r`
+  and then submitted with Enter after a short settle delay (`TMUX_WEB_INPUT_SETTLE_MS` fixes it; default scales with length).
+  First, if the input box on screen holds leftover text, it is emptied with `C-u`/`BSpace` (never `C-c`, whose second press quits Claude);
+  a permission prompt or an unrecognised screen is left alone.
+  `key` must be one of `Enter Escape Up Down Left Right Tab BTab C-u 1 2 3 4 5 y n`. `GET .../history?screen=1` returns only the
+  visible screen, and transcript responses carry `busy` (a turn is running) and `asking` (a permission prompt is waiting), both read
+  off the screen. That depends on Claude Code's wording (`✻ Creating…`, `✻ Coalescing… (7s · …)`, `Do you want to … 1. Yes`, checked
+  against 2.1.291); if a future version changes it, `busy`/`asking` stay false and only the "Sending…" placeholder and the typing keep working.
+* `server.mjs` is zero-dependency Node. It fails closed: until `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD` are set
+  in `~/.config/tmux-web/env`, every request gets 503.
+
+## Install
+
+Requirements: Linux with systemd user services, tmux 3.x, Node 20+, [ttyd](https://github.com/tsl0922/ttyd) 1.7+, [Caddy](https://caddyserver.com) 2.x
+(both single binaries; the examples expect them in `~/.local/bin`), and a Cloudflare Access application in front of the site: the
+API accepts **only** a valid Cloudflare Access JWT (there is no password login), and refuses everything until it is configured.
+
+1. Put the checkout somewhere (the example units assume `~/tmux-web`; adjust them if it is elsewhere).
+2. Copy `systemd/tmux-web-*.service` to `~/.config/systemd/user/`, and `systemd/tmux-web-api.service.d/session-lifetime.conf` to
+   `~/.config/systemd/user/tmux-web-api.service.d/` (it keeps tmux sessions alive across API restarts, see below).
+3. `mkdir -p ~/.config/tmux-web && cp env.example ~/.config/tmux-web/env && chmod 600 ~/.config/tmux-web/env`, then fill it in (below).
+4. `systemctl --user daemon-reload && systemctl --user enable --now tmux-web-ttyd tmux-web-api tmux-web-caddy`
+   (`loginctl enable-linger $USER` keeps them running when you are logged out).
+5. Point a Cloudflare Tunnel (or any reverse proxy) at `http://127.0.0.1:8890`. Caddy binds loopback only.
+6. In `~/.tmux.conf`: `set -g mouse on` and `set -g history-limit 20000` (the list/phone scrolling expects them).
+
+**Cloudflare Access.** Create a self-hosted Access application for your hostname with an allow policy for the people who may use it.
+Put your team domain (`yourteam.cloudflareaccess.com`) and the application's AUD tag in `~/.config/tmux-web/env`
+(`CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`); `ALLOWED_EMAILS` is an optional second check at the origin. If you add someone to the
+policy, add them there too and `systemctl --user restart tmux-web-api`. Multi-user separation is **off** unless you create a users file
+(see "Users and permissions").
+
+## Users and permissions (optional)
+
+**Multi-user is optional and off by default.** It is on exactly when a users file exists (`~/.config/tmux-web/users.json`, or
+`TMUX_WEB_USERS`; `TMUX_WEB_MULTI_USER=0` forces it off even then). Without one, everybody Access lets in is simply the
+operator: every session is shown to and usable by all of them, nothing is stamped with an owner, `/api/me` answers
+`multiUser: false`, and the page shows none of what follows (no "Signed in as", no owner tags, no "Show sessions from" row, no
+read-only views). Everything below describes the mode a users file switches on.
+
+Several people can sign in (everyone in the Access policy and `ALLOWED_EMAILS`). Every session still runs as the one Unix
+user; the web layer keeps them apart by **who started a session on the page**.
+
+* A session made with **Create & open** records its creator's Access email in tmux (session option `@tmux_web_owner`).
+  Sessions started any other way (a terminal, before this feature) have no owner and are shown as **Local**.
+* The list shows your own sessions and the Local ones. Nobody else's, unless `users.json` lets you (below). Then a
+  **Show sessions from** row appears (Mine, Local, each person you may view, Everyone); the choice is remembered per
+  browser. People without that right never see the row, and the server ignores any filter they try to send.
+* If you may only **view** someone else's session it opens **read-only**: you can watch the terminal and use **Read** (the
+  conversation updates live), but there is no message box, key bar, rename or Close, and tmux attaches the client
+  `read-only,ignore-size` so it cannot type or resize the owner's window. If you may **manage** it, it behaves like your own
+  (read-write terminal, message box, rename, Close), with a reminder at the top and the owner named in the Close confirmation. A session you may not see answers 404 on every route, including the terminal WebSocket.
+* The terminal WebSocket goes browser → Caddy → ttyd and never touches the API, so it is checked in `/verify`: Caddy hands it the
+  real request URI (`X-Forwarded-Uri`; a client-sent copy is overwritten), and only `?arg=$N` (owner or Local) or
+  `?arg=$N&arg=ro` (view-only) for a session you may see is let through; anything else on `/term/ws` is refused.
+
+`~/.config/tmux-web/users.json` (path overridable with `TMUX_WEB_USERS`; see `users.example.json`; re-read when it changes,
+and a broken edit keeps the last good version) holds only what differs from a plain user (the `//` notes are for illustration; real JSON has no comments):
+
+    { "unowned": "all",                                  // who sees Local sessions: "all" (default), "viewers", "none"
+      "users": { "owner@example.com": { "name": "Owner", "manageOthers": "all" },
+                 "alice@example.com": { "name": "Alice", "viewOthers": ["bob@example.com"] } } }
+
+`viewOthers` and `manageOthers` each take `"all"` or a list of emails. Managing implies viewing, so a superuser needs only
+`"manageOthers": "all"`. "Viewers" in the `unowned` setting means anyone with either permission.
+
+A signed-in email that is not listed is a plain user: it sees its own sessions (and Local ones per `unowned`) and nobody else's.
+To add a person: add the email to the Access policy **and** `ALLOWED_EMAILS` (restart the API), then, if they should see
+others, to `users.json`.
+
+**What this is not.** It separates people in the web UI and API; it is not a security boundary between Unix accounts. Anyone who
+can open a terminal here can run any command as this user, so they could read other sessions through tmux itself, read files
+or kill the tmux server. Give an account only to someone you would give that shell to. `unowned: "all"` means every user
+can use your own terminal-started sessions (including Claude ones); use `"viewers"` or `"none"` to keep them to yourself.
+
+## Services (systemd --user)
+
+    systemctl --user status tmux-web-ttyd tmux-web-api tmux-web-caddy
+    journalctl --user -u tmux-web-api -f        # shows why a token was denied
+    systemctl --user restart tmux-web-api       # after editing ~/.config/tmux-web/env
+    systemctl --user restart tmux-web-ttyd      # detaches all web clients (sessions survive)
+
+The API service needs `systemd/tmux-web-api.service.d/session-lifetime.conf` installed at
+`~/.config/systemd/user/tmux-web-api.service.d/session-lifetime.conf`, followed by
+`systemctl --user daemon-reload`. Its `KillMode=process` keeps a tmux server spawned by the API
+running across API restarts; the systemd default would terminate every session in that process group.
+
+## Phone notes
+
+* Key bar: Esc, the commands key (`>_`), Clear (Ctrl+U), arrows, PgUp, PgDn, Tab, |, /, ~, Enter (last).
+  The commands key opens a small menu above the bar: **claude** (types `claude --dangerously-skip-permissions` and Enter),
+  **/resume**, **/compact**, **/model**, **/effort** (typed, then Enter a moment later as a separate keystroke, because Claude Code treats text that
+  arrives together with a newline as a paste) and **Ctrl-C**. With the phone keyboard up the menu is a compact grid of six chips. `claude` is greyed out ("Already running") while Claude is the
+  pane's foreground program, since it would be sent to Claude as a message. The menu closes on a tap elsewhere, Esc, or a
+  second tap on the key; with a keyboard, arrows/Home/End move and Enter chooses.
+  A tap sends its key on release; horizontal swipes scroll the compact bar without sending keys.
+  Arrows and page keys repeat when held without moving.
+  The outlined keyboard icon and **Key bar** label toggle it; the highlighted state means it is visible.
+* When the phone keyboard opens or vertical space is short, the header becomes one compact row
+  and the key bar becomes one horizontally scrollable row. The terminal refits to the visual viewport.
+* If the keyboard (plus iOS's AutoFill bar and Safari's bars, or a zoomed page) leaves the terminal fewer than 13 rows, Claude
+  Code may not fit its screen (its bottom block alone is 8-10 rows in a long session): its input line falls off the bottom and the cursor ends up on the rule under it. In that case the
+  title bar folds away, the key bar slims down and, only if still needed, the font shrinks in half-pixel steps (never below 9px; the saved size is
+  untouched). Everything comes back when the keyboard closes. The hidden input also asks iOS not to show AutoFill.
+  The layout is re-checked whenever the viewport, the key bar or the terminal's own box changes, and four times a second for
+  the viewport itself (iOS does not always announce a change). If the cursor is still found on a line of ───── while the
+  keyboard is up, the page first nudges the size (tmux re-reads it and Claude redraws), then, on a short screen, takes one more
+  font step; it never types anything into the program, and starts afresh when the viewport height changes. Below 7 rows even
+  the key bar steps aside. The commands menu ends with a small grey line (build, columns×rows, font, view height, mode,
+  attached clients, and the flags above): that is what to send along when the phone looks wrong.
+* A tap on the terminal focuses it (the keyboard opens) but is never sent to the program as a mouse click: tmux and Claude
+  Code both ask for mouse tracking, and Claude Code moves its text cursor to a clicked column, so on a touch screen the tap that
+  opened the keyboard used to move the cursor into the middle of the input. On touch devices xterm.js therefore keeps mouse
+  tracking off (the programs' request is remembered); computers are unchanged.
+* One-finger swipe scrolls tmux history (needs `set -g mouse on`, which `~/.tmux.conf` has, plus
+  `set -g history-limit 20000`). For anything longer, use **Read**.
+* If a tmux window is `window-size manual` (e.g. after `resize-window`), a larger client only gets dots around it;
+  `tmux set -w -t SESSION:WINDOW -u window-size` puts it back to automatic.
+* `A-`/`A+` change the font size (remembered per browser).
+
+## Tests
+
+Run `node --test test/*.test.mjs` (the plain `node --test test/` form does not work on Node 22). Every test starts its own
+`tmux -L` server and Access signing keys, so it never touches real sessions. `server.test.mjs` covers authentication,
+Origin/content-type restrictions, name validation and conflicts, rename without pane/window loss, explicit close
+confirmation, and survival of other sessions. `history.test.mjs` and `transcript.test.mjs` cover the read-only views
+(hand-written jsonl: backward pagination, every classification, truncation, ANSI, a half-written last line, non-Claude panes
+→ 404, two Claude panes in one directory each getting their own conversation; `TMUX_WEB_CLAUDE_COMMAND='^sleep$'` lets a `sleep` pane stand in for Claude). `input.test.mjs` drives a fake Claude terminal (bracketed paste on) to check exactly which bytes arrive. `users.test.mjs` covers ownership, the per-user list, the permission matrix on every route, `/verify` for terminals,
+config reloads, and multi-user being off without a users file. `helpers.mjs` is the shared scaffolding.
+
+## Vendored libraries
+
+`public/vendor/` serves the reading view's renderer from this site, so the phone needs no outside network:
+marked 15, DOMPurify 3, KaTeX 0.16 (woff2 fonts only; the CSS is rewritten to match), highlight.js 11 (common build plus
+`matlab`). They load when Read first opens a conversation. See `public/vendor/README.md` for versions and how to update.
+
+For browser checks, use a separate stack with a test Access issuer, private sockets and an isolated
+tmux server. Check inline editing, persistent terminal/reconnect, keyboard visibility, cancel/error/
+confirm close flows, return to the list, and narrow mobile layouts.

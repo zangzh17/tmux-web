@@ -1,0 +1,17 @@
+#!/bin/sh
+# Spawned by ttyd (--url-arg): $1 = session name from ?arg=<name>, $2 = "ro" for a view-only attach.
+# Only attaches to an EXISTING session; further args are ignored, so the URL
+# cannot inject arbitrary tmux commands. Killing this process (page closed ->
+# ttyd sends SIGHUP) just detaches the client; the session keeps running.
+# "ro" is for looking at someone else's session (server.mjs /verify insists on it):
+# read-only so nothing can be typed, ignore-size so this screen cannot resize their window.
+name="$1"
+if [ -z "$name" ] || ! /usr/bin/tmux has-session -t "=$name" 2>/dev/null; then
+  printf '\r\n  tmux session not found: %s\r\n' "$(printf '%s' "$name" | tr -cd '[:print:]')"
+  sleep 5
+  exit 1
+fi
+if [ "$2" = ro ]; then
+  exec /usr/bin/tmux -u attach-session -f read-only,ignore-size -t "=$name"
+fi
+exec /usr/bin/tmux -u attach-session -t "=$name"

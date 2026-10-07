@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#0b0e14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>tmux</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+  :root { color-scheme: dark; --bg: #0b0e14; --bar: #141821; --line: #232937; --text: #e6e9ef; --muted: #8b93a5; --accent: #6ea8ff; --key: #1d2330; --key-on: #2f4a7d; --danger: #ff899d; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); overscroll-behavior: none; }
+  body { font: 15px/1.2 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; }
+  /* #app tracks the *visual* viewport so the on-screen keyboard never covers the key bar (see term.js). */
+  #app {
+    position: fixed; left: 0; top: 0; width: 100%; height: var(--vh, 100dvh);
+    transform: translateY(var(--vt, 0px)); display: flex; flex-direction: column;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  }
+  header { flex: none; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 8px; background: var(--bar); border-bottom: 1px solid var(--line); }
+  header a, header button { color: var(--text); text-decoration: none; }
+  #back { display: flex; align-items: center; height: 36px; padding: 0 6px; border-radius: 10px; color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .session-title { min-width: 0; margin: 0; }
+  #title { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-width: 0; height: 36px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; font: 650 15px/1.2 system-ui, sans-serif; cursor: text; }
+  #title:hover { background: var(--key); }
+  #title:disabled { opacity: 1; cursor: default; }
+  #title:disabled:hover { background: transparent; }
+  #title:disabled svg { display: none; } /* read-only (or still loading): nothing to rename */
+  #title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #title svg { flex: none; width: 15px; height: 15px; color: var(--muted); }
+  #title-input { width: 100%; min-width: 0; height: 36px; padding: 0 8px; border: 1px solid var(--accent); border-radius: 8px; background: var(--bg); color: var(--text); font: 16px/1.2 system-ui, sans-serif; }
+  #title-input[aria-invalid="true"] { border-color: var(--danger); }
+  .tools { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; min-width: 0; gap: 4px; }
+  .hbtn { display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 5px; min-width: 34px; height: 36px; padding: 0 7px; border: 1px solid var(--line); border-radius: 9px; background: var(--key); font: 500 14px/1 system-ui, sans-serif; white-space: nowrap; cursor: pointer; }
+  .hbtn svg { width: 18px; height: 18px; flex: none; }
+  .hbtn:active { background: var(--key-on); }
+  .hbtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: #18263f; }
+  .hbtn.danger { color: var(--danger); border-color: #5a303e; }
+  .hbtn, #title, #back { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  #notice { flex: none; padding: 8px 12px; color: var(--muted); background: var(--bar); border-bottom: 1px solid var(--line); font-size: 13px; }
+  #notice.error { color: var(--danger); }
+  #clipboard-status { position: absolute; top: var(--clipboard-top, 54px); right: 8px; z-index: 15; max-width: min(380px, calc(100% - 16px)); padding: 8px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--bar); box-shadow: 0 4px 20px #0006; font-size: 13px; line-height: 1.4; pointer-events: none; }
+  #clipboard-status.error { color: var(--danger); }
+  #t { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg); }
+  #keys { flex: none; display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); background: var(--bar); border-top: 1px solid var(--line); }
+  #keys[hidden] { display: none; }
+  #keys button {
+    height: 40px; padding: 0; border: 0; border-radius: 9px; background: var(--key); color: var(--text);
+    font: 600 0.85rem/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: pan-x; -webkit-tap-highlight-color: transparent;
+  }
+  #keys button:active { background: var(--key-on); }
+  #keys button.cmds { color: var(--accent); }
+  #keys button.cmds svg { width: 20px; height: 20px; }
+  #keys button.cmds[aria-expanded="true"] { background: var(--key-on); }
+  /* common commands: one tap on the key bar opens it above the bar */
+  #cmd-menu { position: absolute; z-index: 12; width: min(330px, calc(100% - 12px)); max-height: calc(var(--vh, 100dvh) - 110px); overflow-y: auto; padding: 5px; border: 1px solid var(--line); border-radius: 14px; background: var(--bar); box-shadow: 0 10px 34px #000b; }
+  #cmd-menu button { display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%; min-height: 46px; padding: 0 10px 0 8px; border: 0; border-radius: 10px; background: transparent; color: var(--text); font: 13px/1.2 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  #cmd-menu button + button { margin-top: 2px; }
+  #cmd-menu button:active, #cmd-menu button:hover, #cmd-menu button:focus-visible { background: var(--key); }
+  #cmd-menu button:disabled { opacity: 0.45; cursor: default; background: transparent; }
+  #cmd-menu .c-name { flex: none; padding: 6px 9px; border-radius: 7px; background: var(--key-on); color: var(--text); font: 600 14px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  #cmd-menu .c-hint { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+  dialog { width: min(420px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--bar); color: var(--text); box-shadow: 0 20px 80px #0008; }
+  dialog::backdrop { background: #0009; }
+  dialog h2 { margin: 0 0 12px; font-size: 19px; }
+  dialog p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+  #close-name { color: var(--text); font-weight: 650; }
+  .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+  .dialog-actions button { min-height: 40px; padding: 0 16px; border: 1px solid var(--line); border-radius: 9px; background: var(--key); color: var(--text); font: 600 14px/1 system-ui, sans-serif; cursor: pointer; }
+  .dialog-actions .confirm { background: #d9435f; border-color: #d9435f; color: #fff; }
+  #close-error { margin-top: 12px; color: var(--danger); }
+  #terminal-menu { position: fixed; z-index: 20; min-width: 190px; max-width: calc(100vw - 16px); padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--bar); box-shadow: 0 8px 30px #0008; }
+  #terminal-menu button { display: block; width: 100%; min-height: 36px; padding: 8px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: 14px/1.2 system-ui, sans-serif; text-align: left; cursor: pointer; }
+  #terminal-menu button:hover, #terminal-menu button:focus-visible { background: var(--key); }
+  #terminal-menu button:disabled { cursor: default; }
+  #selection-hint { max-width: 230px; margin: 5px 10px 4px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+  #text-dialog { position: fixed; inset: auto; top: var(--vt, 0px); left: 0; width: 100%; max-width: none; height: var(--vh, 100dvh); max-height: none; margin: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); border: 0; border-radius: 0; background: var(--bg); }
+  #text-dialog[open] { display: flex; flex-direction: column; }
+  .text-heading { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 12px; background: var(--bar); border-bottom: 1px solid var(--line); }
+  #text-heading { margin: 0; font-size: 17px; } /* screen readers only (.sr-only): the visible top-left control is Detach */
+  .text-back { display: inline-flex; flex: none; align-items: center; gap: 1px; min-height: 34px; padding: 0 10px 0 4px; border-radius: 10px; color: var(--accent); font: 600 15px/1 system-ui, -apple-system, sans-serif; text-decoration: none; white-space: nowrap; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .text-back svg { width: 20px; height: 20px; }
+  .text-back:hover { background: var(--key); }
+  .text-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .text-tools { flex: none; display: flex; gap: 6px; }
+  #text-dialog .text-tools button { min-width: 40px; min-height: 34px; padding: 0; }
+  .text-tools svg { width: 19px; height: 19px; }
+  #text-dialog #text-render[aria-pressed="true"], #text-dialog #text-view[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  #text-dialog button { min-height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--key); color: var(--text); font: 600 14px/1 system-ui, sans-serif; cursor: pointer; touch-action: manipulation; }
+  #text-instruction { flex: none; padding: 8px 12px; font-size: 13px; line-height: 1.4; }
+  #text-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 8px 12px; -webkit-overflow-scrolling: touch; }
+  #text-scroll { overflow-anchor: none; }
+  #text-output { margin: 0; color: var(--text); user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; cursor: text; }
+  #text-output.plain { font: 14px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #text-output::selection, #text-output *::selection { color: var(--text); background: #33467c; }
+  /* Plain-text view of a conversation: one run of raw text, only the speaker lines are marked */
+  #text-output.raw { max-width: 760px; margin: 0 auto; padding: 2px 0 14px; font: 13.5px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, "PingFang SC", monospace; }
+  .raw-who { color: var(--muted); font-weight: 650; }
+  .raw-who.claude { color: var(--accent); }
+  .raw-meta { color: var(--muted); }
+  .raw-pending { opacity: 0.6; }
+  #text-top { padding: 10px 0 2px; color: var(--muted); font-size: 12.5px; text-align: center; }
+  #text-status { flex: none; padding: 5px 12px; background: var(--bar); border-bottom: 1px solid var(--line); font-size: 12.5px; line-height: 1.4; color: var(--muted); }
+  #text-status.error { color: var(--danger); }
+  /* ---- Read dialog, conversation mode (Claude warm dark). term.js adds .claude only for Claude transcripts. */
+  #text-dialog.claude { --bg: #262624; --bar: #1f1e1d; --surface: #30302e; --bubble: #3a3936; --line: #3d3c38; --text: #ece9e1; --muted: #a39f94; --accent: #d97757; --key: #30302e; --key-on: #4a3a33; --code: #1c1b1a; --code-inline: #e9a585; --danger: #f0867f; }
+  #text-dialog.claude #text-output::selection, #text-dialog.claude #text-output *::selection { background: #5d4437; }
+  #text-output.chat { max-width: 760px; margin: 0 auto; padding: 2px 0 20px; font: 15.5px/1.65 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; }
+  /* The confirm dialog's `dialog p` (muted, 14px) must not leak into the reading text. */
+  #text-output p { color: inherit; font-size: inherit; line-height: inherit; }
+  .msg { margin: 14px 0; }
+  .msg .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg .body.md { white-space: normal; }
+  .msg.user, .msg.cmd { display: flex; flex-direction: column; align-items: flex-end; }
+  .msg.user .bubble { max-width: 88%; padding: 9px 14px; border-radius: 18px 18px 6px 18px; background: var(--bubble); }
+  .msg .time { margin-top: 3px; padding-right: 4px; color: var(--muted); font-size: 11.5px; line-height: 1.3; }
+  .who { margin: 20px 0 4px; color: var(--accent); font-size: 13px; font-weight: 650; letter-spacing: 0.2px; }
+  .cmd-pill { max-width: 88%; padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--code-inline); font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+  .note { margin: 10px 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .summary { margin: 14px 0; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); }
+  .summary > summary { padding: 8px 12px; font-size: 13px; cursor: pointer; }
+  .summary .body { padding: 0 12px 12px; font-size: 14px; line-height: 1.6; }
+  .steps { margin: 8px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 13px; line-height: 1.5; }
+  .steps > summary, .res > summary { list-style: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .steps > summary::-webkit-details-marker, .res > summary::-webkit-details-marker { display: none; }
+  .steps > summary { display: flex; align-items: center; gap: 7px; padding: 7px 12px; color: var(--muted); }
+  .steps > summary::before, .res > summary::before { content: '›'; flex: none; display: inline-block; width: 0.7em; font-size: 1.3em; line-height: 1; text-align: center; transition: transform 0.15s; }
+  .steps[open] > summary::before, .res[open] > summary::before { transform: rotate(90deg); }
+  .steps.err > summary, .res.err > summary { color: var(--danger); }
+  .s-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .step { padding: 8px 12px 10px; border-top: 1px solid var(--line); }
+  .tool-name { display: inline-block; margin-bottom: 5px; padding: 0 7px; border-radius: 6px; background: #3b2e28; color: var(--code-inline); font: 600 11.5px/1.7 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .res { margin-top: 6px; }
+  .res > summary { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+  .md > :first-child { margin-top: 0; }
+  .md > :last-child { margin-bottom: 0; }
+  .md p, .md ul, .md ol, .md blockquote, .md table, .md .code-block { margin: 0 0 0.8em; }
+  .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 1.2em 0 0.45em; font-size: 1em; font-weight: 650; line-height: 1.35; }
+  .md h1 { font-size: 1.35em; } .md h2 { font-size: 1.2em; } .md h3 { font-size: 1.08em; }
+  .md ul, .md ol { padding-left: 1.5em; }
+  .md li { margin: 0.2em 0; }
+  .md li > p { margin: 0; }
+  .md a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+  .md blockquote { margin-left: 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
+  .md hr { margin: 1.2em 0; border: 0; border-top: 1px solid var(--line); }
+  .md strong { font-weight: 650; }
+  .md :not(pre) > code { padding: 0.1em 0.38em; border-radius: 5px; background: var(--code); color: var(--code-inline); font: 0.88em ui-monospace, "SF Mono", Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+  .md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+  /* anywhere-wrapping would shrink every column to a few characters; keep words whole and let the table scroll */
+  .md th, .md td { padding: 5px 10px; border: 1px solid var(--line); text-align: left; overflow-wrap: normal; }
+  .md th { background: var(--surface); }
+  .katex-display { overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+  .code-block { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--code); }
+  .code-head { display: flex; align-items: center; justify-content: space-between; padding: 3px 6px 3px 12px; background: var(--surface); color: var(--muted); font: 12px/1.5 system-ui, -apple-system, sans-serif; }
+  .copy-code { padding: 4px 9px; border-radius: 6px; cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+  .copy-code:hover { color: var(--text); }
+  /* pre and its code share one font and line-height, otherwise the first line sits low. */
+  #text-output pre { margin: 0; padding: 10px 12px; overflow-x: auto; background: var(--code); font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #text-output pre code { padding: 0; background: none; color: #e4dfd2; font: inherit; white-space: inherit; overflow-wrap: inherit; }
+  .step pre { margin: 0; border-radius: 8px; }
+  .res pre { max-height: 55vh; margin-top: 6px; border-radius: 8px; overflow-y: auto; }
+  #text-output .hljs-comment, #text-output .hljs-quote { color: #8a8478; font-style: italic; }
+  #text-output .hljs-keyword, #text-output .hljs-selector-tag, #text-output .hljs-doctag, #text-output .hljs-template-tag, #text-output .hljs-template-variable { color: #d896c8; }
+  #text-output .hljs-string, #text-output .hljs-regexp, #text-output .hljs-addition, #text-output .hljs-meta .hljs-string { color: #a9c47c; }
+  #text-output .hljs-number, #text-output .hljs-literal, #text-output .hljs-bullet { color: #e0a56b; }
+  #text-output .hljs-title, #text-output .hljs-title.function_, #text-output .hljs-section { color: #82b4dc; }
+  #text-output .hljs-built_in, #text-output .hljs-type, #text-output .hljs-class .hljs-title, #text-output .hljs-title.class_ { color: #e6c07b; }
+  #text-output .hljs-attr, #text-output .hljs-attribute, #text-output .hljs-variable, #text-output .hljs-name, #text-output .hljs-tag, #text-output .hljs-deletion, #text-output .hljs-selector-class, #text-output .hljs-selector-id { color: #e4858f; }
+  #text-output .hljs-symbol, #text-output .hljs-link, #text-output .hljs-params, #text-output .hljs-meta { color: #78bfc6; }
+  #text-output .hljs-emphasis { font-style: italic; } #text-output .hljs-strong { font-weight: 700; }
+  /* ---- Read dialog: talk to Claude from the conversation view */
+  #composer { flex: none; position: relative; padding: 8px 10px; background: var(--bar); border-top: 1px solid var(--line); }
+  .composer-row { display: flex; align-items: flex-end; gap: 8px; max-width: 760px; margin: 0 auto; }
+  #composer-input { flex: 1; min-width: 0; min-height: 44px; max-height: 32vh; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; resize: none; }
+  #composer-input:focus { outline: none; border-color: var(--accent); }
+  #composer-input::placeholder { color: var(--muted); }
+  #text-dialog #composer-send { flex: none; min-width: 64px; border-color: var(--accent); background: var(--accent); color: #1f1e1d; }
+  #text-dialog #composer-send:disabled { border-color: var(--line); background: var(--key); color: var(--muted); cursor: default; }
+  #text-dialog #peek-toggle { flex: none; width: 44px; padding: 0; }
+  #peek-toggle svg { width: 20px; height: 20px; }
+  #text-dialog #peek-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  #composer-error { max-width: 760px; margin: 0 auto 6px; color: var(--danger); font-size: 13px; line-height: 1.4; }
+  #peek { max-width: 760px; margin: 0 auto 8px; }
+  #peek-screen { margin: 0; padding: 8px 10px; max-height: 26vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--code, #1c1b1a); color: var(--text); font: 12px/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre; user-select: text; -webkit-user-select: text; }
+  #peek-keys { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  #text-dialog #peek-keys button { min-width: 44px; min-height: 40px; padding: 0 12px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  #working { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; max-width: 760px; margin: 0 auto; padding: 0 0 10px; color: var(--muted); font: 13px/1.4 system-ui, -apple-system, sans-serif; }
+  #working .spin { flex: none; }
+  #working-text { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #working .spin { color: var(--accent); animation: working-pulse 1.4s ease-in-out infinite; }
+  @keyframes working-pulse { 50% { opacity: 0.3; } }
+  @media (prefers-reduced-motion: reduce) { #working .spin { animation: none; } }
+  #text-dialog #working button { flex: none; min-height: 30px; padding: 0 11px; font-size: 13px; }
+  @media (max-width: 400px) { #working .lead, #working .more { display: none; } }
+  #text-dialog #jump-new { position: absolute; right: 12px; bottom: calc(100% + 8px); z-index: 2; min-height: 36px; border-color: var(--accent); background: var(--accent); color: #1f1e1d; box-shadow: 0 4px 16px #0008; }
+  .msg.user.pending .bubble { opacity: 0.6; }
+  #text-dialog.typing #composer { padding-bottom: 8px; }
+  @media (max-width: 440px) {
+    .text-heading { gap: 8px; padding: 4px 8px 4px 12px; }
+    #text-dialog .text-tools { gap: 5px; }
+  }
+  /* The header buttons must never wrap onto a second row (it wastes a whole bar of height), so labels go first. */
+  @media (max-width: 720px) {
+    .tools span { display: none; }
+  }
+  @media (max-width: 540px) {
+    header { grid-template-columns: auto 1fr; gap: 4px 6px; }
+    #back { grid-row: 1; grid-column: 1; font-size: 14px; }
+    .tools { grid-row: 1; grid-column: 2; justify-self: end; gap: 3px; }
+    .session-title { grid-row: 2; grid-column: 1 / -1; }
+    #title { justify-content: flex-start; }
+    .hbtn { min-width: 32px; padding: 0 6px; }
+  }
+  @media (max-width: 360px) {
+    .hbtn { gap: 4px; font-size: 13px; }
+    .hbtn svg { width: 16px; height: 16px; }
+  }
+  @media (max-width: 350px) {
+    #back { width: 28px; padding: 0; justify-content: center; font-size: 0; }
+    #back::before { content: '‹'; font-size: 24px; }
+  }
+  .compact header { grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; padding: 4px 6px; }
+  .compact #back { grid-row: 1; grid-column: 1; width: 26px; padding: 0; justify-content: center; font-size: 0; }
+  .compact #back::before { content: '‹'; font-size: 24px; }
+  .compact .session-title { grid-row: 1; grid-column: 2; }
+  .compact .tools { grid-row: 1; grid-column: 3; flex-wrap: nowrap; }
+  .compact .tools span, .compact [id="fs-"], .compact [id="fs+"] { display: none; }
+  .compact .hbtn { width: 34px; padding: 0; }
+  .compact #title { padding: 0 4px; }
+  .compact #notice { padding: 4px 8px; font-size: 12px; }
+  .compact #keys { display: flex; overflow-x: auto; scrollbar-width: none; gap: 6px; padding: 4px 6px; touch-action: pan-x; }
+  .compact #keys::-webkit-scrollbar { display: none; }
+  .compact #keys button { flex: 0 0 40px; height: 32px; font-size: 12px; }
+  /* Very little room left (see layoutTerminal in term.js): the terminal gets everything but a slim key bar. */
+  .tight header, .tight #notice { display: none; }
+  .tight #keys { padding: 2px 6px; }
+  .tight #keys button { height: 30px; }
+  .tight #cmd-menu { max-height: calc(var(--vh, 100dvh) - 48px); }
+  .tight #cmd-menu button { min-height: 36px; }
+  #cmd-menu[hidden] { display: none; }
+  .compact #cmd-menu:not([hidden]) { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .compact #cmd-menu button { flex-direction: column; justify-content: center; min-height: 40px; padding: 4px; }
+  .compact #cmd-menu button + button { margin-top: 0; }
+  .compact #cmd-menu .c-hint { display: none; }
+  .compact #cmd-menu .c-info { grid-column: 1 / -1; }
+  .squeezed #keys { display: none; } /* last resort (see layoutTerminal): even the key bar steps aside */
+  #cmd-menu .c-info { margin: 6px 8px 3px; color: var(--muted); font: 11px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; user-select: text; -webkit-user-select: text; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <a id="back" href="./" aria-label="Back to sessions" title="Back to sessions">‹ Back</a>
+    <form class="session-title" id="rename">
+      <button id="title" type="button" title="Click to rename session" aria-label="Rename session" disabled>
+        <span id="title-text"></span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15z"/></svg>
+      </button>
+      <label class="sr-only" for="title-input">Session name</label>
+      <input id="title-input" type="text" maxlength="48" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" aria-describedby="rename-hint" hidden>
+      <span class="sr-only" id="rename-hint">Start with a letter or number. Use letters, numbers, spaces, - or _, up to 48 characters. Press Enter or click away to save; Esc cancels.</span>
+    </form>
+    <div class="tools">
+      <button class="hbtn" id="fs-" type="button" title="Decrease font size" aria-label="Decrease font size">A−</button>
+      <button class="hbtn" id="fs+" type="button" title="Increase font size" aria-label="Increase font size">A+</button>
+      <button class="hbtn" id="read" type="button" title="Read the conversation or terminal history, and select text" aria-label="Read" aria-haspopup="dialog" aria-controls="text-dialog" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2zM22 4h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8z"/></svg>
+        <span>Read</span>
+      </button>
+      <button class="hbtn" id="plain" type="button" title="Plain text: the conversation as raw text, easy to copy" aria-label="Plain text" aria-haspopup="dialog" aria-controls="text-dialog" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h6"/></svg>
+        <span>Text</span>
+      </button>
+      <button class="hbtn" id="copy" type="button" title="Copy selected text" aria-label="Copy selected terminal text" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></svg>
+        <span>Copy</span>
+      </button>
+      <button class="hbtn" id="kb" type="button" aria-label="Show key bar" aria-controls="keys" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10"/></svg>
+        <span>Key bar</span>
+      </button>
+      <button class="hbtn danger" id="close-session" type="button" title="Close current session" aria-label="Close current session" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m8 8 8 8m0-8-8 8"/></svg>
+        <span>Close</span>
+      </button>
+    </div>
+  </header>
+  <div id="notice" role="status" aria-live="polite" hidden></div>
+  <div id="clipboard-status" role="status" aria-live="polite" hidden></div>
+  <iframe id="t" title="Terminal"></iframe>
+  <div id="keys"></div>
+  <div id="cmd-menu" role="menu" aria-label="Common commands" hidden></div>
+</div>
+<dialog id="text-dialog" aria-labelledby="text-heading" aria-describedby="text-instruction">
+  <div class="text-heading">
+    <a id="text-back" class="text-back" href="./" title="Detach: back to the session list (the session keeps running)" aria-label="Detach and return to the session list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg><span>Detach</span></a>
+    <h2 id="text-heading" class="sr-only">Read</h2>
+    <div class="text-tools">
+      <button id="text-render" type="button" aria-pressed="true" aria-label="Render Markdown, code and math" title="Render Markdown, code and math" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      <button id="text-view" type="button" aria-pressed="false" aria-label="Plain text view" title="Plain text view: raw text, easy to copy" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h6"/></svg></button>
+      <button id="text-refresh" type="button" aria-label="Refresh" title="Load the latest output"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
+      <button id="text-done" type="button" aria-label="Done" title="Close" autofocus><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    </div>
+  </div>
+  <p id="text-instruction">Select the text you want to copy.</p>
+  <div id="text-status" role="status" aria-live="polite" hidden></div>
+  <div id="text-scroll" tabindex="0" role="region" aria-label="Conversation or terminal text">
+    <div id="text-top" hidden></div>
+    <div id="text-output" class="plain"></div>
+    <div id="working" role="status" hidden>
+      <span class="spin" aria-hidden="true">✻</span>
+      <span id="working-text"><span class="lead">Claude is </span><span id="working-what">working…</span></span>
+      <button id="working-stop" type="button" title="Interrupt Claude (Esc)">Stop</button>
+      <button id="working-screen" type="button" aria-label="Screen and keys" title="Show the terminal screen and keys">Screen<span class="more"> &amp; keys</span></button>
+    </div>
+  </div>
+  <div id="composer" hidden>
+    <button id="jump-new" type="button" hidden>↓ New messages</button>
+    <p id="composer-error" role="alert" hidden></p>
+    <div id="peek" hidden>
+      <pre id="peek-screen" tabindex="0" aria-label="Terminal screen" role="region"></pre>
+      <div id="peek-keys" role="group" aria-label="Send a key to Claude"></div>
+    </div>
+    <div class="composer-row">
+      <button id="peek-toggle" type="button" aria-pressed="false" aria-controls="peek" aria-label="Show terminal screen and keys" title="Show the terminal screen and keys (for permission prompts)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
+      </button>
+      <textarea id="composer-input" rows="1" maxlength="20000" placeholder="Message Claude…" aria-label="Message to Claude" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" spellcheck="true"></textarea>
+      <button id="composer-send" type="button" disabled>Send</button>
+    </div>
+  </div>
+</dialog>
+<div id="terminal-menu" role="menu" aria-label="Terminal clipboard actions" hidden>
+  <button id="menu-copy" type="button" role="menuitem">Copy</button>
+  <button id="menu-paste" type="button" role="menuitem">Paste</button>
+  <button id="menu-select-all" type="button" role="menuitem">Select all</button>
+  <p id="selection-hint">Hold Shift and drag to select text (Option on Mac).</p>
+</div>
+<dialog id="close-dialog" aria-labelledby="close-heading" aria-describedby="close-description">
+  <h2 id="close-heading">Close this session?</h2>
+  <p id="close-description">This will end “<span id="close-name"></span>” and all its windows and running programs. You will return to the session list.</p>
+  <p id="close-error" role="alert" hidden></p>
+  <div class="dialog-actions">
+    <button id="close-cancel" type="button" autofocus>Cancel</button>
+    <button id="close-confirm" class="confirm" type="button">Close session</button>
+  </div>
+</dialog>
+<script src="term.js?v=20261007-list-1"></script>
+</body>
+</html>
