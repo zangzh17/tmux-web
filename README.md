@@ -60,6 +60,15 @@ The session list has **Preview lines** buttons for no preview, 1, 2, 5, 7, 10, 1
 The default is 7, and the selection is remembered per browser. The API supplies up to the last 50 nonempty
 output lines, including recent scrollback when the terminal is short. Long lines are truncated within
 each card so they cannot expand the page past the screen width.
+The Read view's **Aa** button opens a row with **Size** (A−/A+, 80–160 %, scales everything in the text including code and
+tool steps) and **Width** (Normal 760 px, Wide 1100 px, Full). Both are remembered per browser. On a phone held sideways, Full
+also gives the text the safe-area margin of the edge without the notch (the side is taken from `window.orientation`).
+While the page is pinch-zoomed (`visualViewport.scale > 1`) it no longer follows the visual viewport (that resized and moved the
+page on every pan step and flickered); keyboard tracking resumes at 1×.
+On touch screens, printable characters typed into the live terminal are taken from the browser's `input` event and the
+IME's committed text rather than from keydown: iOS's Chinese keyboard reports punctuation as keydown 229 or as the ASCII key
+under it, which xterm.js turned into a doubled `，，` or a `,`. Control keys (Enter, Backspace, arrows, Ctrl chords) still go
+through xterm. QA: change `20261015-reader-ime` (`qa/ime-qa.mjs`, `qa/reader-fmt.mjs`).
 The top-left control of the Read view is **Detach** (back to the session list; the session keeps running); ✕ closes only the view.
 The **Close** button on each list card and inside a session opens a confirmation dialog. Confirming ends that entire session,
 including its windows and running programs, and returns to the list.

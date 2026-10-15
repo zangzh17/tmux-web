@@ -101,7 +101,24 @@
   #text-output.plain { font: 14px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
   #text-output::selection, #text-output *::selection { color: var(--text); background: #33467c; }
   /* Plain-text view of a conversation: one run of raw text, only the speaker lines are marked */
-  #text-output.raw { max-width: 760px; margin: 0 auto; padding: 2px 0 14px; font: 13.5px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, "PingFang SC", monospace; }
+  #text-dialog { --read-width: 760px; --read-scale: 1; }
+  #text-dialog[data-width="wide"] { --read-width: 1100px; }
+  #text-dialog[data-width="full"] { --read-width: 100vw; }
+  #text-dialog[data-width="full"] #text-scroll { padding-left: 6px; padding-right: 6px; }
+  /* A phone on its side pads both edges by the safe area (~47-59 px each), though only one edge has the notch/Dynamic Island.
+     In Full the text also takes the other edge (term.js sets data-notch from the screen's rotation). */
+  #text-dialog[data-width="full"][data-notch="left"] #text-scroll { margin-right: calc(-1 * env(safe-area-inset-right)); }
+  #text-dialog[data-width="full"][data-notch="right"] #text-scroll { margin-left: calc(-1 * env(safe-area-inset-left)); }
+  #text-output, #text-top { zoom: var(--read-scale); }
+  #text-fmt-panel { flex: none; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; padding: 6px 10px; background: var(--bar); border-bottom: 1px solid var(--line); }
+  #text-fmt-panel[hidden] { display: none; }
+  .fmt-group { display: inline-flex; align-items: center; gap: 4px; }
+  .fmt-label { margin-right: 2px; color: var(--muted); font: 12.5px/1 system-ui, -apple-system, sans-serif; }
+  #text-dialog #text-fmt-panel button { min-width: 38px; min-height: 32px; padding: 0 9px; font-size: 13px; }
+  #text-dialog #text-fmt-panel button[aria-pressed="true"], #text-dialog #text-fmt[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  @media (max-width: 380px) { #text-dialog .text-tools { gap: 4px; } #text-dialog .text-tools button { min-width: 35px; } }
+  #text-scale { min-width: 3.2em; color: var(--text); font: 600 13px/1 system-ui, sans-serif; text-align: center; font-variant-numeric: tabular-nums; }
+  #text-output.raw { max-width: calc(var(--read-width) / var(--read-scale)); margin: 0 auto; padding: 2px 0 14px; font: 13.5px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, "PingFang SC", monospace; }
   .raw-who { color: var(--muted); font-weight: 650; }
   .raw-who.claude { color: var(--accent); }
   .raw-meta { color: var(--muted); }
@@ -112,7 +129,7 @@
   /* ---- Read dialog, conversation mode (Claude warm dark). term.js adds .claude only for Claude transcripts. */
   #text-dialog.claude { --bg: #262624; --bar: #1f1e1d; --surface: #30302e; --bubble: #3a3936; --line: #3d3c38; --text: #ece9e1; --muted: #a39f94; --accent: #d97757; --key: #30302e; --key-on: #4a3a33; --code: #1c1b1a; --code-inline: #e9a585; --danger: #f0867f; }
   #text-dialog.claude #text-output::selection, #text-dialog.claude #text-output *::selection { background: #5d4437; }
-  #text-output.chat { max-width: 760px; margin: 0 auto; padding: 2px 0 20px; font: 15.5px/1.65 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; }
+  #text-output.chat { max-width: calc(var(--read-width) / var(--read-scale)); margin: 0 auto; padding: 2px 0 20px; font: 15.5px/1.65 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; }
   /* The confirm dialog's `dialog p` (muted, 14px) must not leak into the reading text. */
   #text-output p { color: inherit; font-size: inherit; line-height: inherit; }
   .msg { margin: 14px 0; }
@@ -177,7 +194,7 @@
   #text-output .hljs-emphasis { font-style: italic; } #text-output .hljs-strong { font-weight: 700; }
   /* ---- Read dialog: talk to Claude from the conversation view */
   #composer { flex: none; position: relative; padding: 8px 10px; background: var(--bar); border-top: 1px solid var(--line); }
-  .composer-row { display: flex; align-items: flex-end; gap: 8px; max-width: 760px; margin: 0 auto; }
+  .composer-row { display: flex; align-items: flex-end; gap: 8px; max-width: var(--read-width); margin: 0 auto; }
   #composer-input { flex: 1; min-width: 0; min-height: 44px; max-height: 32vh; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; resize: none; }
   #composer-input:focus { outline: none; border-color: var(--accent); }
   #composer-input::placeholder { color: var(--muted); }
@@ -186,12 +203,12 @@
   #text-dialog #peek-toggle { flex: none; width: 44px; padding: 0; }
   #peek-toggle svg { width: 20px; height: 20px; }
   #text-dialog #peek-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-  #composer-error { max-width: 760px; margin: 0 auto 6px; color: var(--danger); font-size: 13px; line-height: 1.4; }
-  #peek { max-width: 760px; margin: 0 auto 8px; }
+  #composer-error { max-width: var(--read-width); margin: 0 auto 6px; color: var(--danger); font-size: 13px; line-height: 1.4; }
+  #peek { max-width: var(--read-width); margin: 0 auto 8px; }
   #peek-screen { margin: 0; padding: 8px 10px; max-height: 26vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--code, #1c1b1a); color: var(--text); font: 12px/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre; user-select: text; -webkit-user-select: text; }
   #peek-keys { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   #text-dialog #peek-keys button { min-width: 44px; min-height: 40px; padding: 0 12px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-  #working { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; max-width: 760px; margin: 0 auto; padding: 0 0 10px; color: var(--muted); font: 13px/1.4 system-ui, -apple-system, sans-serif; }
+  #working { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; max-width: var(--read-width); margin: 0 auto; padding: 0 0 10px; color: var(--muted); font: 13px/1.4 system-ui, -apple-system, sans-serif; }
   #working .spin { flex: none; }
   #working-text { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #working .spin { color: var(--accent); animation: working-pulse 1.4s ease-in-out infinite; }
@@ -305,9 +322,14 @@
     <div class="text-tools">
       <button id="text-render" type="button" aria-pressed="true" aria-label="Render Markdown, code and math" title="Render Markdown, code and math" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
       <button id="text-view" type="button" aria-pressed="false" aria-label="Plain text view" title="Plain text view: raw text, easy to copy" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h6"/></svg></button>
+      <button id="text-fmt" type="button" aria-pressed="false" aria-expanded="false" aria-controls="text-fmt-panel" aria-label="Text size and width" title="Text size and width"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 19 8.5 5h1L15 19M5.2 14h7.6M16 19l3.2-8h.6L23 19M17 16.5h5"/></svg></button>
       <button id="text-refresh" type="button" aria-label="Refresh" title="Load the latest output"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
       <button id="text-done" type="button" aria-label="Done" title="Close" autofocus><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
     </div>
+  </div>
+  <div id="text-fmt-panel" role="group" aria-label="Text size and width" hidden>
+    <span class="fmt-group"><span class="fmt-label">Size</span><button type="button" data-scale="-1" aria-label="Smaller text">A−</button><output id="text-scale" aria-live="polite">100%</output><button type="button" data-scale="1" aria-label="Larger text">A+</button></span>
+    <span class="fmt-group"><span class="fmt-label">Width</span><button type="button" data-width="normal" aria-pressed="true">Normal</button><button type="button" data-width="wide" aria-pressed="false">Wide</button><button type="button" data-width="full" aria-pressed="false">Full</button></span>
   </div>
   <p id="text-instruction">Select the text you want to copy.</p>
   <div id="text-status" role="status" aria-live="polite" hidden></div>

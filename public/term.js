@@ -46,6 +46,10 @@
     const root = document.documentElement.style;
     const height = vv ? vv.height : innerHeight;
     seenViewport = `${height}|${vv ? vv.offsetTop : 0}|${innerHeight}`;
+    // Pinch-zoomed in: the visual viewport is now a window panning over the page, not the keyboard taking space. Following it
+    // resized and moved the whole page (and the terminal's rows) on every pan step, and scrollTo pulled the pan back: it flickered.
+    // Stay as laid out until the zoom goes back to 1.
+    if (vv && vv.scale > 1.01) return;
     if (Math.abs(height - lastHeight) > 2) { lastHeight = height; layoutFixes = 0; layoutBoost = 0; } // a new situation: start the symptom check afresh
     fullViewportHeight = Math.max(fullViewportHeight, height);
     document.getElementById('app').classList.toggle('compact', coarse && (height <= 500 || fullViewportHeight - height > 140));
@@ -773,6 +777,48 @@
     node.addEventListener('pointerdown', (event) => event.preventDefault());
   }
 
+  // Text size and reading width: an Aa panel under the heading, remembered per browser.
+  const $fmt = document.getElementById('text-fmt'), $fmtPanel = document.getElementById('text-fmt-panel'), $scale = document.getElementById('text-scale');
+  const SCALES = [0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.45, 1.6];
+  let readScale = SCALES.includes(+store.get('readScale')) ? +store.get('readScale') : 1;
+  let readWidth = ['normal', 'wide', 'full'].includes(store.get('readWidth')) ? store.get('readWidth') : 'normal';
+  function applyReadFormat() {
+    $textDialog.style.setProperty('--read-scale', String(readScale));
+    $textDialog.dataset.width = readWidth;
+    // which long edge the notch is on: rotated a quarter turn left (90) puts it on the left
+    const angle = typeof window.orientation === 'number' ? window.orientation : screen.orientation?.angle;
+    $textDialog.dataset.notch = !coarse ? '' : angle === 90 ? 'left' : angle === 270 || angle === -90 ? 'right' : '';
+    $scale.textContent = `${Math.round(readScale * 100)}%`;
+    for (const b of $fmtPanel.querySelectorAll('[data-width]')) b.setAttribute('aria-pressed', String(b.dataset.width === readWidth));
+    const [smaller, larger] = $fmtPanel.querySelectorAll('[data-scale]');
+    smaller.disabled = readScale === SCALES[0];
+    larger.disabled = readScale === SCALES.at(-1);
+  }
+  $fmt.addEventListener('click', () => {
+    const open = $fmtPanel.hidden;
+    $fmtPanel.hidden = !open;
+    $fmt.setAttribute('aria-pressed', String(open));
+    $fmt.setAttribute('aria-expanded', String(open));
+  });
+  $fmtPanel.addEventListener('click', (event) => {
+    const button = event.target.closest('button');
+    if (!button) return;
+    // keep the reader's place: remember how far through the text we are, restore it after the reflow
+    const box = $textScroll, ratio = box.scrollHeight > box.clientHeight ? box.scrollTop / (box.scrollHeight - box.clientHeight) : 1;
+    if (button.dataset.scale) readScale = SCALES[Math.min(SCALES.length - 1, Math.max(0, SCALES.indexOf(readScale) + +button.dataset.scale))];
+    if (button.dataset.width) readWidth = button.dataset.width;
+    store.set('readScale', String(readScale));
+    store.set('readWidth', readWidth);
+    applyReadFormat();
+    if (ratio > 0.995) toBottom();
+    else { programmaticUntil = performance.now() + 200; box.scrollTop = ratio * (box.scrollHeight - box.clientHeight); }
+  });
+  // Taps here must not take focus from the message box either.
+  for (const node of [$fmt, $fmtPanel]) node.addEventListener('pointerdown', (event) => { if (event.target.closest('button')) event.preventDefault(); });
+  applyReadFormat();
+  addEventListener('orientationchange', applyReadFormat);
+  screen.orientation?.addEventListener?.('change', applyReadFormat);
+
   document.getElementById('text-instruction').textContent = plainHint;
   $read.addEventListener('click', () => openReader(false, $read));
   $plain.addEventListener('click', () => openReader(true, $plain));
@@ -1355,6 +1401,41 @@
     } catch { /* the DOM renderer stays */ }
   }
 
+  // ---- phone keyboards: printable text comes from what the browser inserts, not from keydown
+  // iOS's Chinese keyboard reports a punctuation key with keydown 229 ("IME busy") or with the ASCII key it sits on ("," for ，),
+  // and only the input event that follows carries the real character. xterm.js trusts the keydown, so ， arrived twice or as ",",
+  // and a mark typed right after a pinyin commit overtook the commit. Here xterm still gets the control keys (Enter, Backspace,
+  // arrows, Ctrl/Alt chords); every printable character is sent from the input event or from the composition's result instead.
+  function softKeyboardInput(doc) {
+    const ta = doc.querySelector('.xterm-helper-textarea');
+    if (!ta) return;
+    let composing = false; let committed = null;
+    const own = (event) => event.target === ta;
+    const printable = (e) => !e.ctrlKey && !e.metaKey && !e.altKey && (e.keyCode === 229 || e.key === 'Unidentified' || e.key === 'Process' || [...e.key].length === 1);
+    const tidy = () => setTimeout(() => { if (!composing) ta.value = ''; }, 0);
+    const keep = (e) => { if (own(e)) e.stopImmediatePropagation(); };
+    doc.addEventListener('keydown', (e) => { if (own(e) && (composing || e.isComposing || printable(e))) e.stopImmediatePropagation(); }, true);
+    doc.addEventListener('keypress', keep, true);
+    doc.addEventListener('compositionstart', (e) => { keep(e); if (own(e)) composing = true; }, true);
+    doc.addEventListener('compositionupdate', keep, true);
+    doc.addEventListener('compositionend', (e) => {
+      if (!own(e)) return;
+      e.stopImmediatePropagation();
+      composing = false;
+      if (e.data) { send(e.data); committed = e.data; setTimeout(() => { committed = null; }, 80); }
+      tidy();
+    }, true);
+    doc.addEventListener('input', (e) => {
+      if (!own(e)) return;
+      e.stopImmediatePropagation();
+      if (composing || e.isComposing || /Composition/.test(e.inputType || '')) return;
+      const data = e.data ?? e.dataTransfer?.getData('text/plain');
+      if (data && committed !== null && data === committed) { committed = null; return; } // Safari repeats the commit as an input event
+      if (data && (e.inputType === 'insertText' || e.inputType === 'insertReplacementText')) send(data);
+      tidy(); // Enter, Backspace and the like already went to xterm as keys
+    }, true);
+  }
+
   // ---- wire up once ttyd has created the terminal
   function setup() {
     const doc = w.document;
@@ -1371,6 +1452,7 @@
     tightStyle.textContent = 'html.tight #terminal-container .terminal { padding: 2px; height: calc(100% - 4px); }';
     doc.head.appendChild(tightStyle);
     doc.querySelector('.xterm-helper-textarea')?.setAttribute('autocomplete', 'off'); // best effort: no iOS AutoFill bar (it eats ~90px)
+    if (coarse && !readOnly) softKeyboardInput(doc);
     doc.documentElement.style.background = theme.background;
     const box = doc.getElementById('terminal-container');
     if (box) box.style.touchAction = 'none';
