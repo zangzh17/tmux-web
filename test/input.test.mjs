@@ -155,7 +155,7 @@ test('exactly one of text and key is required, and the instance must be well-for
 });
 
 test('every allowlisted key delivers what tmux sends for it', async () => {
-  const bytes = { Enter: '\r', Escape: '\x1b', Tab: '\t', BTab: '\x1b[Z', 'C-u': '\x15', 1: '1', 2: '2', 3: '3', 4: '4', 5: '5', y: 'y', n: 'n' };
+  const bytes = { Enter: '\r', Escape: '\x1b', Tab: '\t', BTab: '\x1b[Z', 'C-u': '\x15', 1: '1', 2: '2', 3: '3', 4: '4', 5: '5', y: 'y', n: 'n', SendNow: '\x18\x13' };
   for (const [key, want] of Object.entries(bytes)) {
     reset();
     const res = await input({ key });

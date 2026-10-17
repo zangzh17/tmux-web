@@ -257,6 +257,41 @@ async function whoAmI(user) {
     local: accessFor(user, '') ? rows.filter((r) => !r.owner).length : 0 };
 }
 
+// ---- per-person display preferences (font sizes, Read view size/width, which view a session opens in)
+// Kept here as well as in the browser so they survive Safari clearing site data and follow the person to another device of the
+// same kind: keys are "<phone|tablet|desktop>.<name>", so an iPhone and an iPad keep their own sizes. One small JSON file,
+// { "<email>": { "<key>": "<value>" } }, written atomically (TMUX_WEB_PREFS, default ~/.local/state/tmux-web/prefs.json).
+const PREFS_FILE = process.env.TMUX_WEB_PREFS || path.join(os.homedir(), '.local', 'state', 'tmux-web', 'prefs.json');
+const PREF_KEY = /^(?:phone|tablet|desktop)\.(?:fs|readScale|readWidth|view)$(?![\s\S])/;
+const PREF_VALUE = /^[A-Za-z0-9.-]{1,16}$(?![\s\S])/;
+let prefsWrite = Promise.resolve();
+function readPrefs() {
+  try { const all = JSON.parse(fs.readFileSync(PREFS_FILE, 'utf8')); return isObject(all) ? all : {}; } catch { return {}; }
+}
+const prefsOf = (all, email) => (isObject(all[email]) ? Object.fromEntries(Object.entries(all[email]).filter(([k, v]) => PREF_KEY.test(k) && typeof v === 'string' && PREF_VALUE.test(v))) : {});
+// PUT /api/prefs { prefs: { key: value | null } }: merged into what is stored (null removes a key); answers with the result.
+async function savePrefs(req, user) {
+  const input = await readMutation(req, 4096);
+  if (input.status) return input;
+  const { prefs } = input.data;
+  if (!isObject(prefs) || Object.entries(prefs).some(([k, v]) => !PREF_KEY.test(k) || (v !== null && (typeof v !== 'string' || !PREF_VALUE.test(v))))) {
+    return { status: 400, body: { error: 'invalid preferences' } };
+  }
+  const run = prefsWrite.then(() => {
+    const all = readPrefs();
+    const mine = { ...prefsOf(all, user.email) };
+    for (const [k, v] of Object.entries(prefs)) { if (v === null) delete mine[k]; else mine[k] = v; }
+    all[user.email] = mine;
+    fs.mkdirSync(path.dirname(PREFS_FILE), { recursive: true, mode: 0o700 });
+    const temp = `${PREFS_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(temp, `${JSON.stringify(all, null, 1)}\n`, { mode: 0o600 });
+    fs.renameSync(temp, PREFS_FILE);
+    return mine;
+  });
+  prefsWrite = run.catch(() => {});
+  return { status: 200, body: { prefs: await run } };
+}
+
 const SESSION_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$(?![\s\S])/;
 const DISPLAY_NAME = /^[\p{L}\p{N}][\p{L}\p{N} _-]{0,47}$(?![\s\S])/u;
 const SESSION_ID = /^\$\d+$(?![\s\S])/;
@@ -652,7 +687,8 @@ async function sessionTranscript(id, query) {
 //   multi-line message is one submission; key is one of INPUT_KEYS (Esc to interrupt, arrows/digits/y/n for prompts).
 //   The input box is emptied first if it holds leftovers (see clearPrompt). Control characters are stripped from text, ESC above all: a pasted ESC[201~ must not end the bracketed paste and
 //   turn the rest into keystrokes. 404 when the session is gone or `instance` is stale, 409 when the pane isn't Claude.
-const INPUT_KEYS = new Set(['Enter', 'Escape', 'Up', 'Down', 'Left', 'Right', 'Tab', 'BTab', 'C-u', '1', '2', '3', '4', '5', 'y', 'n']);
+// SendNow is Claude Code's chat:sendNow chord (Ctrl+X Ctrl+S): a message queued while Claude works is sent at once, interrupting the turn.
+const INPUT_KEYS = new Set(['Enter', 'Escape', 'Up', 'Down', 'Left', 'Right', 'Tab', 'BTab', 'C-u', '1', '2', '3', '4', '5', 'y', 'n', 'SendNow']);
 const INPUT_MAX = 20000;
 const INPUT_SETTLE = process.env.TMUX_WEB_INPUT_SETTLE_MS;
 const settleMs = (text) => (/^\d+$/.test(INPUT_SETTLE || '') ? +INPUT_SETTLE : Math.min(1500, 150 + text.length / 10));
@@ -713,7 +749,7 @@ async function sessionInput(req, id) {
   if (live !== instance) return gone; // a reused ID must never receive input meant for an old tab
   if (!CLAUDE_COMMAND.test(command || '') || !/^%\d+$/.test(pane || '')) return { status: 409, body: { error: 'no Claude in this pane' } };
   await serialized(pane, async () => {
-    if (message === undefined) { await tmux(['send-keys', '-t', pane, key]); return; }
+    if (message === undefined) { await tmux(['send-keys', '-t', pane, ...(key === 'SendNow' ? ['C-x', 'C-s'] : [key])]); return; }
     await clearPrompt(pane);
     const name = `tmux-web-${process.pid}-${++inputSeq}`;
     try {
@@ -750,6 +786,8 @@ const server = http.createServer(async (req, res) => {
       return result.status === 200 ? send(res, 200, 'ok') : send(res, result.status, result.reason);
     }
     if (pathname === '/api/me' && req.method === 'GET') return sendJson(res, { status: 200, body: await whoAmI(user) });
+    if (pathname === '/api/prefs' && req.method === 'GET') return sendJson(res, { status: 200, body: { prefs: prefsOf(readPrefs(), user.email) } });
+    if (pathname === '/api/prefs' && req.method === 'PUT') return sendJson(res, await savePrefs(req, user));
     if (pathname === '/api/sessions' && req.method === 'GET') {
       const specs = ownerSpecs(user, searchParams);
       const sessions = await listSessions(user, specs, searchParams.get('preview') !== '0');
@@ -771,7 +809,7 @@ const server = http.createServer(async (req, res) => {
       if (view) return sendJson(res, await (view === 'history' ? sessionHistory : sessionTranscript)(id, searchParams));
       return sendJson(res, await changeSession(req, id));
     }
-    if (pathname === '/api/sessions' || pathname === '/api/me' || pathname === '/verify') return send(res, 405, 'method not allowed');
+    if (pathname === '/api/sessions' || pathname === '/api/me' || pathname === '/api/prefs' || pathname === '/verify') return send(res, 405, 'method not allowed');
     return send(res, 404, 'not found');
   } catch (e) {
     console.error('[tmux-web] handler error:', e.message);

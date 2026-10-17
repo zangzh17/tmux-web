@@ -60,8 +60,17 @@ The session list has **Preview lines** buttons for no preview, 1, 2, 5, 7, 10, 1
 The default is 7, and the selection is remembered per browser. The API supplies up to the last 50 nonempty
 output lines, including recent scrollback when the terminal is short. Long lines are truncated within
 each card so they cannot expand the page past the screen width.
-The Read view's **Aa** button opens a row with **Size** (A−/A+, 80–160 %, scales everything in the text including code and
-tool steps) and **Width** (Normal 760 px, Wide 1100 px, Full). Both are remembered per browser. On a phone held sideways, Full
+The Read view's **Aa** button opens a row with **Size** (A−/A+ or the slider, 80–500 %, scales everything in the text including code and
+tool steps) and **Width** (Normal 760 px, Wide 1100 px, Full).
+Display preferences (terminal font, Read size and width, and the view a Claude session opens in) are remembered per person
+**and device kind** (phone, tablet, desktop: a touch screen whose short side is ≥ 600 CSS px is a tablet, so an iPad and an
+iPhone keep their own sizes): in the browser, and on the server (`GET/PUT /api/prefs`, `TMUX_WEB_PREFS`, default
+`~/.local/state/tmux-web/prefs.json`, mode 600, only whitelisted keys), so they survive Safari clearing site data and reach
+another device of the same kind. A Claude session opens in Read only if Read (or Text) was the last view used; after **Done**
+the next one opens in the terminal.
+When ttyd gives up on its socket and shows "Press ⏎ to Reconnect" (it does after any socket error, which is how iOS reports a
+connection dropped while the page was in the background, and after a clean close), the page checks that the session still
+exists and presses Enter for it (or loads the terminal again); at most five tries in two minutes. On a phone held sideways, Full
 also gives the text the safe-area margin of the edge without the notch (the side is taken from `window.orientation`).
 While the page is pinch-zoomed (`visualViewport.scale > 1`) it no longer follows the visual viewport (that resized and moved the
 page on every pan step and flickered); keyboard tracking resumes at 1×.
@@ -206,9 +215,13 @@ running across API restarts; the systemd default would terminate every session i
 
 ## Phone notes
 
-* Key bar: Esc, the commands key (`>_`), Clear (Ctrl+U), arrows, PgUp, PgDn, Tab, |, /, ~, Enter (last).
+* Key bar (phone): Esc, the commands key (`>_`), Clear (Ctrl+U), ↑ ↓, Tab, ← →, |, /, ~, Enter (last). Up/down and
+  left/right are two colours with Tab between the pairs. Tablet: bigger keys, plus ^C, **Send now** (Claude Code's
+  Ctrl+X Ctrl+S, `chat:sendNow`: a message queued while Claude works is sent at once, interrupting the turn) and ⇧Tab, with the
+  arrows as a cross and Enter in its middle. Page up/down are round bubbles on both edges of the terminal, shown with the key bar.
+  The Read view shows **Send now** next to Stop while a message you sent waits for a busy Claude (API key `SendNow`).
   The commands key opens a small menu above the bar: **claude** (types `claude --dangerously-skip-permissions` and Enter),
-  **/resume**, **/compact**, **/model**, **/effort** (typed, then Enter a moment later as a separate keystroke, because Claude Code treats text that
+  **/resume**, **/compact**, **/model**, **/effort**, a row of `/effort max | xhigh | high | medium | low`, **Send now** (typed, then Enter a moment later as a separate keystroke, because Claude Code treats text that
   arrives together with a newline as a paste) and **Ctrl-C**. With the phone keyboard up the menu is a compact grid of six chips. `claude` is greyed out ("Already running") while Claude is the
   pane's foreground program, since it would be sent to Claude as a message. The menu closes on a tap elsewhere, Esc, or a
   second tap on the key; with a keyboard, arrows/Home/End move and Enter chooses.

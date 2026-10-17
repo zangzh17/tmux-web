@@ -36,6 +36,56 @@
   };
   const coarse = matchMedia('(pointer: coarse)').matches
     || (navigator.maxTouchPoints > 0 && /iPhone|iPad|Macintosh|Android/.test(navigator.userAgent));
+  // A phone and a tablet get their own key bar and keep their own sizes (see prefs). iPadOS says it is a Mac; its touch screen
+  // (coarse) gives it away. The short side of the screen does not change when it is turned.
+  const DEVICE = !coarse ? 'desktop' : Math.min(screen.width, screen.height) >= 600 ? 'tablet' : 'phone';
+  // ---- display preferences: terminal font, Read view size and width, and the view a Claude session opens in. Read from this
+  // browser at once, and kept on the server per person and device kind (api/prefs), so they come back after Safari clears the
+  // site's data and follow the person to another device of the same kind. A value changed here before the server answers wins.
+  const PREF_NAMES = ['fs', 'readScale', 'readWidth', 'view'];
+  const prefs = (() => {
+    const key = (n) => `${DEVICE}.${n}`;
+    const touched = new Set();
+    let queued = {};
+    let timer = null;
+    const flush = () => {
+      clearTimeout(timer);
+      timer = null;
+      if (!Object.keys(queued).length) return;
+      const body = JSON.stringify({ prefs: queued });
+      queued = {};
+      fetch('api/prefs', { method: 'PUT', credentials: 'same-origin', cache: 'no-store', keepalive: true, headers: { 'content-type': 'application/json' }, body }).catch(() => {});
+    };
+    const push = (n, v) => { queued[key(n)] = v; clearTimeout(timer); timer = setTimeout(flush, 800); };
+    addEventListener('pagehide', flush);
+    const ready = (async () => {
+      let saved = {};
+      try {
+        const res = await fetch('api/prefs', { credentials: 'same-origin', cache: 'no-store' });
+        if (res.ok) saved = (await res.json()).prefs || {};
+        else return [];
+      } catch { return []; }
+      const changed = [];
+      for (const n of PREF_NAMES) {
+        const local = store.get(key(n)) ?? store.get(n);
+        const theirs = saved[key(n)];
+        if (touched.has(n) || theirs == null) { if (local != null && local !== theirs) push(n, local); continue; } // first time: the server learns this browser's
+        if (theirs !== local) { store.set(key(n), theirs); changed.push(n); }
+      }
+      return changed;
+    })();
+    return {
+      get: (n) => store.get(key(n)) ?? store.get(n), // the plain key is this browser's value from before device kinds
+      ready,
+      set(n, v) {
+        v = String(v);
+        touched.add(n);
+        if (store.get(key(n)) === v) return;
+        store.set(key(n), v);
+        push(n, v);
+      },
+    };
+  })();
 
   // ---- keep #app on the visual viewport (iOS keyboard shifts / doesn't resize the layout viewport)
   const vv = window.visualViewport;
@@ -105,6 +155,7 @@
   const $workingWhat = document.getElementById('working-what');
   const $workingStop = document.getElementById('working-stop');
   const $workingScreen = document.getElementById('working-screen');
+  const $workingNow = document.getElementById('working-now');
   const $jump = document.getElementById('jump-new');
   const $peek = document.getElementById('peek');
   const $peekScreen = document.getElementById('peek-screen');
@@ -607,6 +658,7 @@
     if (!sessionId || $textDialog.open) return;
     opener = from;
     textView = asText;
+    prefs.set('view', asText ? 'text' : 'read'); // the next Claude session opens the same way
     hideMenu();
     $clipboardStatus.hidden = true;
     w?.term?.blur();
@@ -639,6 +691,8 @@
     const stick = $working.hidden && nearBottom();
     $workingWhat.textContent = asking ? 'asking for permission.' : 'working…';
     $workingStop.hidden = $workingScreen.hidden = readOnly;
+    // a message sent while Claude works waits in its queue; this sends it at once (Claude Code's Ctrl+X Ctrl+S)
+    $workingNow.hidden = readOnly || !busy || asking || !pending.some((entry) => entry.sent);
     $working.hidden = false;
     if (stick) toBottom();
     // A prompt needs a key, not text: show the screen once per prompt (closing it keeps it closed until the next one).
@@ -760,6 +814,7 @@
   $peekToggle.addEventListener('click', () => setPeek(!peekOpen));
   document.getElementById('working-screen').addEventListener('click', () => setPeek(true));
   document.getElementById('working-stop').addEventListener('click', () => { void sendKey('Escape'); });
+  $workingNow.addEventListener('click', () => { void sendKey('SendNow'); });
   $jump.addEventListener('click', () => { toBottom(); $jump.hidden = true; });
   for (const [label, key, title] of [['Esc', 'Escape', 'Interrupt / cancel'], ['↑', 'Up'], ['↓', 'Down'], ['Enter', 'Enter'], ['1', '1'], ['2', '2'], ['3', '3'], ['y', 'y'], ['n', 'n'], ['Tab', 'Tab'], ['⇧Tab', 'BTab', 'Shift+Tab (cycle permission mode)'], ['Clear', 'C-u', 'Clear the input line']]) {
     const button = make('button', null, label);
@@ -773,15 +828,27 @@
     if (key) void sendKey(key);
   });
   // Tapping these must not take focus from the message box, or the keyboard drops and the layout jumps under the finger.
-  for (const node of [$composerSend, $peekToggle, $peekKeys, $jump, document.getElementById('working-stop'), document.getElementById('working-screen')]) {
+  for (const node of [$composerSend, $peekToggle, $peekKeys, $jump, document.getElementById('working-stop'), document.getElementById('working-screen'), $workingNow]) {
     node.addEventListener('pointerdown', (event) => event.preventDefault());
   }
 
   // Text size and reading width: an Aa panel under the heading, remembered per browser.
   const $fmt = document.getElementById('text-fmt'), $fmtPanel = document.getElementById('text-fmt-panel'), $scale = document.getElementById('text-scale');
-  const SCALES = [0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.45, 1.6];
-  let readScale = SCALES.includes(+store.get('readScale')) ? +store.get('readScale') : 1;
-  let readWidth = ['normal', 'wide', 'full'].includes(store.get('readWidth')) ? store.get('readWidth') : 'normal';
+  // Up to five times the normal size: on a phone held at arm's length, or an iPad across the room, 160 % was not enough.
+  const SCALES = [0.8, 0.9, 1, 1.1, 1.2, 1.35, 1.5, 1.7, 2, 2.3, 2.6, 3, 3.5, 4, 4.5, 5];
+  const $scaleRange = document.getElementById('text-scale-range');
+  $scaleRange.max = String(SCALES.length - 1);
+  let readScale = 1;
+  let readWidth = 'normal';
+  // a stored size that is not a step any more (an older list) goes to the nearest step
+  const nearestScale = (v) => SCALES.reduce((best, x) => (Math.abs(x - v) < Math.abs(best - v) ? x : best), 1);
+  function loadReadFormat() {
+    const scale = +prefs.get('readScale');
+    readScale = scale > 0 ? nearestScale(scale) : 1;
+    const width = prefs.get('readWidth');
+    readWidth = ['normal', 'wide', 'full'].includes(width) ? width : 'normal';
+  }
+  loadReadFormat();
   function applyReadFormat() {
     $textDialog.style.setProperty('--read-scale', String(readScale));
     $textDialog.dataset.width = readWidth;
@@ -789,6 +856,8 @@
     const angle = typeof window.orientation === 'number' ? window.orientation : screen.orientation?.angle;
     $textDialog.dataset.notch = !coarse ? '' : angle === 90 ? 'left' : angle === 270 || angle === -90 ? 'right' : '';
     $scale.textContent = `${Math.round(readScale * 100)}%`;
+    $scaleRange.value = String(SCALES.indexOf(readScale));
+    $scaleRange.setAttribute('aria-valuetext', `${Math.round(readScale * 100)}%`);
     for (const b of $fmtPanel.querySelectorAll('[data-width]')) b.setAttribute('aria-pressed', String(b.dataset.width === readWidth));
     const [smaller, larger] = $fmtPanel.querySelectorAll('[data-scale]');
     smaller.disabled = readScale === SCALES[0];
@@ -800,19 +869,26 @@
     $fmt.setAttribute('aria-pressed', String(open));
     $fmt.setAttribute('aria-expanded', String(open));
   });
-  $fmtPanel.addEventListener('click', (event) => {
-    const button = event.target.closest('button');
-    if (!button) return;
-    // keep the reader's place: remember how far through the text we are, restore it after the reflow
+  // keep the reader's place: remember how far through the text we are, restore it after the reflow
+  function changeReadFormat(change) {
     const box = $textScroll, ratio = box.scrollHeight > box.clientHeight ? box.scrollTop / (box.scrollHeight - box.clientHeight) : 1;
-    if (button.dataset.scale) readScale = SCALES[Math.min(SCALES.length - 1, Math.max(0, SCALES.indexOf(readScale) + +button.dataset.scale))];
-    if (button.dataset.width) readWidth = button.dataset.width;
-    store.set('readScale', String(readScale));
-    store.set('readWidth', readWidth);
+    change();
+    prefs.set('readScale', readScale);
+    prefs.set('readWidth', readWidth);
     applyReadFormat();
     if (ratio > 0.995) toBottom();
     else { programmaticUntil = performance.now() + 200; box.scrollTop = ratio * (box.scrollHeight - box.clientHeight); }
+  }
+  $fmtPanel.addEventListener('click', (event) => {
+    const button = event.target.closest('button');
+    if (!button) return;
+    changeReadFormat(() => {
+      if (button.dataset.scale) readScale = SCALES[Math.min(SCALES.length - 1, Math.max(0, SCALES.indexOf(readScale) + +button.dataset.scale))];
+      if (button.dataset.width) readWidth = button.dataset.width;
+    });
   });
+  $scaleRange.addEventListener('input', () => changeReadFormat(() => { readScale = SCALES[+$scaleRange.value] ?? readScale; }));
+  void prefs.ready.then((changed) => { if (changed.includes('readScale') || changed.includes('readWidth')) { loadReadFormat(); applyReadFormat(); } });
   // Taps here must not take focus from the message box either.
   for (const node of [$fmt, $fmtPanel]) node.addEventListener('pointerdown', (event) => { if (event.target.closest('button')) event.preventDefault(); });
   applyReadFormat();
@@ -830,6 +906,7 @@
   });
   document.getElementById('text-done').addEventListener('click', () => $textDialog.close());
   $textDialog.addEventListener('close', () => {
+    prefs.set('view', 'term');
     generation++;
     mode = null;
     Object.assign(chat, { items: [], start: 0, total: 0, file: null, loading: false });
@@ -1122,23 +1199,37 @@
   });
 
   // ---- key bar
-  const KEYS = [
-    { l: 'Esc', s: '\x1b' }, { menu: true, title: 'Common commands' }, { l: 'Clear', s: '\x15', title: 'Clear input (Ctrl+U)' },
-    { l: '←', s: '\x1b[D', rep: 1 }, { l: '↓', s: '\x1b[B', rep: 1 }, { l: '↑', s: '\x1b[A', rep: 1 }, { l: '→', s: '\x1b[C', rep: 1 },
-    { l: 'PgUp', s: '\x1b[5~', rep: 1 },
-    { l: 'PgDn', s: '\x1b[6~', rep: 1 }, { l: 'Tab', s: '\t' }, { l: '|', s: '|' }, { l: '/', s: '/' }, { l: '~', s: '~' },
-    { l: 'Enter', s: '\r', title: 'Enter' },
-  ];
+  // Up/down and left/right are told apart by colour, and on a phone a key sits between the two pairs so a thumb does not hit
+  // the wrong one. A tablet has room for bigger keys, Ctrl+C and Send now, and arrows laid out as arrows, with Enter in the middle.
+  // Page up/down are not on the bar: they float as bubbles on both edges of the terminal (#pager-left/right).
+  const K = {
+    esc: { l: 'Esc', s: '\x1b' }, menu: { menu: true, title: 'Common commands' }, clear: { l: 'Clear', s: '\x15', title: 'Clear input (Ctrl+U)' },
+    up: { l: '↑', s: '\x1b[A', rep: 1, cls: 'v', title: 'Up' }, down: { l: '↓', s: '\x1b[B', rep: 1, cls: 'v', title: 'Down' },
+    left: { l: '←', s: '\x1b[D', rep: 1, cls: 'h', title: 'Left' }, right: { l: '→', s: '\x1b[C', rep: 1, cls: 'h', title: 'Right' },
+    tab: { l: 'Tab', s: '\t' }, btab: { l: '⇧Tab', s: '\x1b[Z', title: 'Shift+Tab (Claude: cycle the permission mode)' },
+    ctrlc: { l: '^C', s: '\x03', cls: 'warn', title: 'Ctrl+C: interrupt (pressed twice, it quits Claude)' },
+    // Claude Code's chat:sendNow chord: a message queued while Claude works is sent at once, interrupting the turn
+    now: { l: 'Send now', s: '\x18\x13', cls: 'now', title: 'Send now (Ctrl+X Ctrl+S): Claude sends the queued message at once, interrupting its turn' },
+    pipe: { l: '|', s: '|' }, slash: { l: '/', s: '/' }, tilde: { l: '~', s: '~' },
+    enter: { l: 'Enter', s: '\r', cls: 'enter', title: 'Enter' },
+    pgup: { svg: '<path d="m7 11 5-5 5 5M7 18l5-5 5 5"/>', s: '\x1b[5~', rep: 1, title: 'Page up' },
+    pgdn: { svg: '<path d="m7 6 5 5 5-5M7 13l5 5 5-5"/>', s: '\x1b[6~', rep: 1, title: 'Page down' },
+  };
+  const BAR = DEVICE === 'tablet'
+    ? { main: ['esc', 'menu', 'ctrlc', 'clear', 'tab', 'now', 'btab', 'pipe', 'slash', 'tilde'], pad: ['up', 'left', 'enter', 'right', 'down'] }
+    : { main: ['esc', 'menu', 'clear', 'up', 'down', 'tab', 'left', 'right', 'pipe', 'slash', 'tilde', 'enter'] };
   // The commands menu (the second key). Typed text is submitted with a separate Enter a moment later: Claude Code treats text that
   // arrives together with a newline as a paste and would not submit it. `claude` is the only one with a guard: typed into a
-  // running Claude it would be sent to it as a message.
+  // running Claude it would be sent to it as a message. A row with `chips` is one row of choices (/effort max, xhigh, …).
   const COMMANDS = [
     { name: 'claude', hint: 'Start, skip permissions', text: 'claude --dangerously-skip-permissions', enter: true, notInClaude: true },
     { name: '/resume', hint: 'Pick a past conversation', text: '/resume', enter: true },
     { name: '/compact', hint: 'Compress the context', text: '/compact', enter: true },
     { name: '/model', hint: 'Switch the model', text: '/model', enter: true },
     { name: '/effort', hint: 'Set the thinking effort', text: '/effort', enter: true },
-    { name: 'Ctrl-C', hint: 'Interrupt', text: '\x03' },
+    { name: '/effort', chips: ['max', 'xhigh', 'high', 'medium', 'low'] },
+    { name: 'Send now', hint: 'Queued message, at once', text: '\x18\x13', title: 'Ctrl+X Ctrl+S' },
+    { name: 'Ctrl-C', hint: 'Interrupt', text: '\x03', title: 'Ctrl+C' },
   ];
   const $cmdMenu = document.getElementById('cmd-menu');
   let $cmdButton = null;
@@ -1147,16 +1238,19 @@
     $cmdMenu.hidden = true;
     $cmdButton?.setAttribute('aria-expanded', 'false');
   };
-  for (const k of KEYS) {
+  function keyButton(k, pos) {
     const b = document.createElement('button');
     b.type = 'button';
+    if (k.cls) b.className = k.cls;
+    if (pos) b.dataset.pos = pos;
     if (k.menu) {
       b.className = 'cmds';
       b.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 8 4 4-4 4M13 17h5"/></svg>';
       b.setAttribute('aria-haspopup', 'menu');
       b.setAttribute('aria-expanded', 'false');
       $cmdButton = b;
-    } else b.textContent = k.l;
+    } else if (k.svg) b.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${k.svg}</svg>`;
+    else b.textContent = k.l;
     if (k.title) { b.title = k.title; b.setAttribute('aria-label', k.title); }
     let holdTimer = null;
     let repeatTimer = null;
@@ -1196,13 +1290,46 @@
     for (const type of ['pointercancel', 'pointerleave', 'lostpointercapture']) b.addEventListener(type, cancel);
     b.addEventListener('click', (e) => { e.preventDefault(); if (e.detail === 0) fire(); });
     b.addEventListener('contextmenu', (e) => e.preventDefault());
-    $keys.append(b);
+    return b;
   }
+  $keys.classList.add(DEVICE);
+  document.getElementById('app').classList.add(`dev-${DEVICE}`);
+  if (BAR.pad) {
+    const main = Object.assign(document.createElement('div'), { className: 'kmain' });
+    const pad = Object.assign(document.createElement('div'), { className: 'dpad' });
+    main.append(...BAR.main.map((n) => keyButton(K[n])));
+    pad.append(...BAR.pad.map((n) => keyButton(K[n], n)));
+    $keys.append(main, pad);
+  } else $keys.append(...BAR.main.map((n) => keyButton(K[n])));
+  for (const side of ['left', 'right']) document.getElementById(`pager-${side}`).append(keyButton(K.pgup), keyButton(K.pgdn));
+  const keepFocus = (node) => node.addEventListener('mousedown', (e) => e.preventDefault()); // keep the terminal's focus (and the phone keyboard)
   const cmdRows = COMMANDS.map((c) => {
+    if (c.chips) {
+      const row = document.createElement('div');
+      row.className = 'c-chips';
+      row.setAttribute('role', 'group');
+      row.setAttribute('aria-label', `${c.name} …`);
+      const name = document.createElement('span');
+      name.className = 'c-name';
+      name.textContent = c.name;
+      row.append(name);
+      for (const value of c.chips) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.setAttribute('role', 'menuitem');
+        chip.textContent = value;
+        chip.title = `${c.name} ${value}`;
+        keepFocus(chip);
+        chip.addEventListener('click', () => { void runCommand({ text: chip.title, enter: true }, chip); });
+        row.append(chip);
+      }
+      $cmdMenu.append(row);
+      return null;
+    }
     const row = document.createElement('button');
     row.type = 'button';
     row.setAttribute('role', 'menuitem');
-    row.title = c.enter ? c.text : 'Ctrl+C';
+    row.title = c.title || c.text;
     const name = document.createElement('span');
     name.className = 'c-name';
     name.textContent = c.name;
@@ -1210,11 +1337,11 @@
     hint.className = 'c-hint';
     hint.textContent = c.hint;
     row.append(name, hint);
-    row.addEventListener('mousedown', (e) => e.preventDefault()); // keep the terminal's focus (and the phone keyboard)
+    keepFocus(row);
     row.addEventListener('click', () => { void runCommand(c, row); });
     $cmdMenu.append(row);
     return { c, row, hint };
-  });
+  }).filter(Boolean);
   const $cmdInfo = document.createElement('div');
   $cmdInfo.className = 'c-info';
   $cmdMenu.append($cmdInfo);
@@ -1284,6 +1411,7 @@
   const showKeys = (on) => {
     if (!on) hideCmdMenu();
     $keys.hidden = !on;
+    document.getElementById('app').classList.toggle('pagers', on && coarse);
     $kb.setAttribute('aria-pressed', String(on));
     $kb.setAttribute('aria-label', on ? 'Hide key bar' : 'Show key bar');
     $kb.title = on ? 'Hide terminal key bar' : 'Show terminal key bar';
@@ -1294,12 +1422,13 @@
   $kb.addEventListener('click', () => showKeys($keys.hidden));
 
   // ---- font size
-  let fs = +store.get('fs') || (innerWidth < 600 ? 13 : 14);
-  function applyFont(n) {
-    fs = Math.max(9, Math.min(26, n));
-    store.set('fs', String(fs));
+  let fs = +prefs.get('fs') || (innerWidth < 600 ? 13 : 14);
+  function applyFont(n, save = true) {
+    fs = Math.max(9, Math.min(36, n));
+    if (save) prefs.set('fs', fs);
     layoutTerminal();
   }
+  void prefs.ready.then((changed) => { if (changed.includes('fs') && +prefs.get('fs')) applyFont(+prefs.get('fs'), false); });
   // Size the terminal for the room it really has. On a phone the keyboard, iOS's AutoFill bar and Safari's own bars can leave
   // only ~190px. Claude Code needs MIN_ROWS rows or so (tmux's status line included) to show its notices, rules, input line and
   // footer; with fewer, its input line falls off the bottom of the screen and the cursor is left sitting on the rule under it. So when the terminal would be shorter than that
@@ -1456,7 +1585,7 @@
     doc.documentElement.style.background = theme.background;
     const box = doc.getElementById('terminal-container');
     if (box) box.style.touchAction = 'none';
-    applyFont(fs);
+    applyFont(fs, false);
     if (!coarse) loadCanvasRenderer();
     w.term.onCursorMove(() => scheduleCheck(900));
     if (readOnly) w.term.options.disableStdin = true;
@@ -1540,6 +1669,46 @@
     }, { passive: false });
   }
 
+  // ---- reconnect without asking
+  // ttyd reconnects by itself only after a close it takes for a hiccup. Any socket error (what iOS reports for a socket it
+  // dropped while the page was in the background or the phone asleep) and every clean close (the tmux client exited) leave it
+  // showing "Press ⏎ to Reconnect" and waiting for a key. Nobody needs to be asked: if the session is still there, the page
+  // presses Enter for them (ttyd's own reconnect), or loads the terminal again if ttyd does not take it. Paced, and only in front.
+  let reconnects = [];
+  let reconnecting = false;
+  const askingToReconnect = () => {
+    const el = w?.term?.element;
+    return !!el && [...el.children].some((n) => /Press ⏎ to Reconnect/.test(n.textContent) && !n.className && n.style.opacity !== '0');
+  };
+  async function sessionStillThere() {
+    try {
+      const res = await fetch('api/sessions?owner=all&preview=0', { credentials: 'same-origin', cache: 'no-store' });
+      if (!res.ok) return true; // cannot tell (signed out?): try anyway, loading the terminal again shows what is wrong
+      return (await res.json()).sessions.some((x) => x.id === sessionId && x.instance === sessionInstance);
+    } catch { return true; }
+  }
+  async function reconnectIfAsked() {
+    if (reconnecting || closing || document.hidden || !askingToReconnect()) return;
+    const now = Date.now();
+    reconnects = reconnects.filter((t) => now - t < 120000);
+    if (reconnects.length >= 5) { showNotice('The terminal keeps disconnecting. Reload the page to try again.', true); return; }
+    reconnecting = true;
+    try {
+      if (reconnects.length) await new Promise((resolve) => setTimeout(resolve, 1500 * reconnects.length));
+      if (!askingToReconnect() || document.hidden) return;
+      if (!(await sessionStillThere())) { showNotice('This session has ended. Return to the session list.', true); return; }
+      reconnects.push(Date.now());
+      const ta = w.document.querySelector('.xterm-helper-textarea');
+      const enter = new w.KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true });
+      for (const k of ['keyCode', 'which']) Object.defineProperty(enter, k, { get: () => 13 }); // xterm.js reads keyCode
+      ta?.dispatchEvent(enter);
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+      if (askingToReconnect()) frame.src = frame.src; // ttyd did not take the key: load the terminal again
+    } finally { reconnecting = false; }
+  }
+  setInterval(() => { void reconnectIfAsked(); }, 1500);
+  document.addEventListener('visibilitychange', () => { void reconnectIfAsked(); });
+
   let setupTimer = null;
   frame.addEventListener('load', () => {
     clearInterval(setupTimer);
@@ -1576,6 +1745,7 @@
         // this just removes the controls that could not work.
         $title.disabled = true;
         $close.hidden = $kb.hidden = $keys.hidden = true;
+        document.getElementById('app').classList.remove('pagers');
         $title.title = '';
         showNotice(`Viewing ${session.owner?.name || 'another user'}'s session · read-only`);
       } else if (session.owner && !session.mine) {
@@ -1583,9 +1753,13 @@
         showNotice(`${session.owner.name}'s session · you can control it, so what you type goes to them`);
       }
       frame.src = `term/?arg=${encodeURIComponent(sessionId)}${readOnly ? '&arg=ro' : ''}`;
-      // Every time a session is opened: if Claude is what runs in it, start in the Read view (the rendered conversation).
-      // The terminal is one tap away (Done), and stays that way until the page is opened again.
-      if (await isClaudePane(session)) openReader(false);
+      // If Claude is what runs in it, open the way the last session was left on this kind of device: in the Read view (the
+      // rendered conversation, also the default), as plain text, or (after Done) in the terminal.
+      if (await isClaudePane(session)) {
+        await Promise.race([prefs.ready, new Promise((resolve) => setTimeout(resolve, 1500))]);
+        const view = prefs.get('view');
+        if (view !== 'term') openReader(view === 'text', view === 'text' ? $plain : $read);
+      }
     } catch (error) {
       showNotice(error.message, true);
     }

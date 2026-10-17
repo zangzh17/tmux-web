@@ -47,8 +47,9 @@
   #notice.error { color: var(--danger); }
   #clipboard-status { position: absolute; top: var(--clipboard-top, 54px); right: 8px; z-index: 15; max-width: min(380px, calc(100% - 16px)); padding: 8px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--bar); box-shadow: 0 4px 20px #0006; font-size: 13px; line-height: 1.4; pointer-events: none; }
   #clipboard-status.error { color: var(--danger); }
-  #t { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg); }
-  #keys { flex: none; display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); background: var(--bar); border-top: 1px solid var(--line); }
+  #term-wrap { position: relative; flex: 1; min-height: 0; }
+  #t { display: block; width: 100%; height: 100%; border: 0; background: var(--bg); }
+  #keys { flex: none; display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); background: var(--bar); border-top: 1px solid var(--line); }
   #keys[hidden] { display: none; }
   #keys button {
     height: 40px; padding: 0; border: 0; border-radius: 9px; background: var(--key); color: var(--text);
@@ -59,6 +60,36 @@
   #keys button.cmds { color: var(--accent); }
   #keys button.cmds svg { width: 20px; height: 20px; }
   #keys button.cmds[aria-expanded="true"] { background: var(--key-on); }
+  #keys.desktop { grid-template-columns: repeat(12, 1fr); }
+  /* up/down and left/right in two colours, so a thumb can tell the pairs apart */
+  #keys button.v { background: #15313b; color: #7dcfff; box-shadow: inset 0 0 0 1px #2a5566; }
+  #keys button.h { background: #2a2342; color: #c9a9ff; box-shadow: inset 0 0 0 1px #4a3d70; }
+  #keys button.v:active, #keys button.h:active { background: var(--key-on); }
+  #keys button.v, #keys button.h { font-size: 1.2rem; }
+  #keys.tablet button.v, #keys.tablet button.h { font-size: 1.45rem; }
+  #keys button.warn { color: var(--danger); }
+  #keys button.now { color: #9ece6a; font: 600 0.8rem/1.1 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #keys button.enter { color: var(--accent); }
+  /* tablet: bigger keys on the left, the arrows as a cross on the right with Enter in its middle */
+  #keys.tablet { --kh: 42px; display: flex; gap: 12px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
+  #keys.tablet .kmain { flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-template-rows: 1fr 1fr; gap: 8px; }
+  #keys.tablet .dpad { flex: none; display: grid; grid-template-columns: repeat(3, 66px); grid-template-rows: repeat(3, var(--kh)); gap: 5px; grid-template-areas: ". up ." "left enter right" ". down ."; }
+  #keys.tablet button { height: auto; min-height: 0; border-radius: 11px; font-size: 1.05rem; }
+  #keys.tablet button.now { font-size: 0.95rem; }
+  #keys.tablet .dpad [data-pos="up"] { grid-area: up; } #keys.tablet .dpad [data-pos="down"] { grid-area: down; }
+  #keys.tablet .dpad [data-pos="left"] { grid-area: left; } #keys.tablet .dpad [data-pos="right"] { grid-area: right; }
+  #keys.tablet .dpad [data-pos="enter"] { grid-area: enter; font-size: 0.9rem; background: #1b2a45; }
+  @media (max-width: 600px) { #keys.tablet { gap: 8px; padding-left: 6px; padding-right: 6px; } #keys.tablet .dpad { grid-template-columns: repeat(3, 50px); } #keys.tablet .kmain { gap: 5px; } #keys.tablet button { font-size: 0.85rem; } }
+  /* page up/down: two bubbles on each edge of the terminal, shown with the key bar on touch screens */
+  .pager { position: absolute; top: 50%; z-index: 5; display: none; flex-direction: column; gap: 10px; transform: translateY(-50%); }
+  .pagers .pager { display: flex; }
+  #pager-left { left: 3px; }
+  #pager-right { right: 3px; }
+  .pager button { display: grid; place-items: center; width: 34px; height: 42px; padding: 0; border: 1px solid #ffffff24; border-radius: 17px; background: #1d2330b8; color: #e6e9ef; opacity: 0.5;
+    -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; -webkit-tap-highlight-color: transparent; }
+  .pager button svg { width: 18px; height: 18px; }
+  .pager button:active { opacity: 1; background: var(--key-on); }
+  .dev-tablet .pager button { width: 42px; height: 52px; border-radius: 21px; }
   /* common commands: one tap on the key bar opens it above the bar */
   #cmd-menu { position: absolute; z-index: 12; width: min(330px, calc(100% - 12px)); max-height: calc(var(--vh, 100dvh) - 110px); overflow-y: auto; padding: 5px; border: 1px solid var(--line); border-radius: 14px; background: var(--bar); box-shadow: 0 10px 34px #000b; }
   #cmd-menu button { display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%; min-height: 46px; padding: 0 10px 0 8px; border: 0; border-radius: 10px; background: transparent; color: var(--text); font: 13px/1.2 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
@@ -66,6 +97,10 @@
   #cmd-menu button:active, #cmd-menu button:hover, #cmd-menu button:focus-visible { background: var(--key); }
   #cmd-menu button:disabled { opacity: 0.45; cursor: default; background: transparent; }
   #cmd-menu .c-name { flex: none; padding: 6px 9px; border-radius: 7px; background: var(--key-on); color: var(--text); font: 600 14px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  #cmd-menu .c-chips { display: flex; align-items: center; gap: 4px; margin-top: 2px; padding: 4px 4px 4px 8px; }
+  #cmd-menu .c-chips .c-name { margin-right: 4px; }
+  #cmd-menu .c-chips button { flex: 1 1 0; justify-content: center; width: auto; min-width: 0; min-height: 36px; margin: 0; padding: 0 2px; border: 1px solid var(--line); border-radius: 8px; font: 600 12.5px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .compact #cmd-menu .c-chips button { flex-direction: row; min-height: 34px; padding: 0 2px; }
   #cmd-menu .c-hint { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
   dialog { width: min(420px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--bar); color: var(--text); box-shadow: 0 20px 80px #0008; }
   dialog::backdrop { background: #0009; }
@@ -110,6 +145,7 @@
   #text-dialog[data-width="full"][data-notch="left"] #text-scroll { margin-right: calc(-1 * env(safe-area-inset-right)); }
   #text-dialog[data-width="full"][data-notch="right"] #text-scroll { margin-left: calc(-1 * env(safe-area-inset-left)); }
   #text-output, #text-top { zoom: var(--read-scale); }
+  #text-top { overflow-wrap: anywhere; } /* at 500 % a phone has room for ~5 characters a line */
   #text-fmt-panel { flex: none; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; padding: 6px 10px; background: var(--bar); border-bottom: 1px solid var(--line); }
   #text-fmt-panel[hidden] { display: none; }
   .fmt-group { display: inline-flex; align-items: center; gap: 4px; }
@@ -117,6 +153,7 @@
   #text-dialog #text-fmt-panel button { min-width: 38px; min-height: 32px; padding: 0 9px; font-size: 13px; }
   #text-dialog #text-fmt-panel button[aria-pressed="true"], #text-dialog #text-fmt[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   @media (max-width: 380px) { #text-dialog .text-tools { gap: 4px; } #text-dialog .text-tools button { min-width: 35px; } }
+  #text-scale-range { width: min(240px, 46vw); accent-color: var(--accent); }
   #text-scale { min-width: 3.2em; color: var(--text); font: 600 13px/1 system-ui, sans-serif; text-align: center; font-variant-numeric: tabular-nums; }
   #text-output.raw { max-width: calc(var(--read-width) / var(--read-scale)); margin: 0 auto; padding: 2px 0 14px; font: 13.5px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, "PingFang SC", monospace; }
   .raw-who { color: var(--muted); font-weight: 650; }
@@ -215,6 +252,7 @@
   @keyframes working-pulse { 50% { opacity: 0.3; } }
   @media (prefers-reduced-motion: reduce) { #working .spin { animation: none; } }
   #text-dialog #working button { flex: none; min-height: 30px; padding: 0 11px; font-size: 13px; }
+  #text-dialog #working #working-now { border-color: #4f6b35; color: #9ece6a; }
   @media (max-width: 400px) { #working .lead, #working .more { display: none; } }
   #text-dialog #jump-new { position: absolute; right: 12px; bottom: calc(100% + 8px); z-index: 2; min-height: 36px; border-color: var(--accent); background: var(--accent); color: #1f1e1d; box-shadow: 0 4px 16px #0008; }
   .msg.user.pending .bubble { opacity: 0.6; }
@@ -255,10 +293,15 @@
   .compact #keys { display: flex; overflow-x: auto; scrollbar-width: none; gap: 6px; padding: 4px 6px; touch-action: pan-x; }
   .compact #keys::-webkit-scrollbar { display: none; }
   .compact #keys button { flex: 0 0 40px; height: 32px; font-size: 12px; }
+  .compact #keys button.now { flex-basis: 64px; }
+  .compact #keys.tablet { --kh: 32px; display: flex; overflow: visible; gap: 10px; padding: 4px 8px; }
+  .compact #keys.tablet button { flex: initial; height: auto; font-size: 0.95rem; }
   /* Very little room left (see layoutTerminal in term.js): the terminal gets everything but a slim key bar. */
   .tight header, .tight #notice { display: none; }
   .tight #keys { padding: 2px 6px; }
   .tight #keys button { height: 30px; }
+  .tight #keys.tablet { --kh: 24px; }
+  .tight #keys.tablet button { height: auto; }
   .tight #cmd-menu { max-height: calc(var(--vh, 100dvh) - 48px); }
   .tight #cmd-menu button { min-height: 36px; }
   #cmd-menu[hidden] { display: none; }
@@ -266,7 +309,7 @@
   .compact #cmd-menu button { flex-direction: column; justify-content: center; min-height: 40px; padding: 4px; }
   .compact #cmd-menu button + button { margin-top: 0; }
   .compact #cmd-menu .c-hint { display: none; }
-  .compact #cmd-menu .c-info { grid-column: 1 / -1; }
+  .compact #cmd-menu .c-info, .compact #cmd-menu .c-chips { grid-column: 1 / -1; }
   .squeezed #keys { display: none; } /* last resort (see layoutTerminal): even the key bar steps aside */
   #cmd-menu .c-info { margin: 6px 8px 3px; color: var(--muted); font: 11px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; user-select: text; -webkit-user-select: text; overflow-wrap: anywhere; }
 </style>
@@ -311,7 +354,11 @@
   </header>
   <div id="notice" role="status" aria-live="polite" hidden></div>
   <div id="clipboard-status" role="status" aria-live="polite" hidden></div>
-  <iframe id="t" title="Terminal"></iframe>
+  <div id="term-wrap">
+    <iframe id="t" title="Terminal"></iframe>
+    <div class="pager" id="pager-left" role="group" aria-label="Page up and down"></div>
+    <div class="pager" id="pager-right" role="group" aria-label="Page up and down"></div>
+  </div>
   <div id="keys"></div>
   <div id="cmd-menu" role="menu" aria-label="Common commands" hidden></div>
 </div>
@@ -328,7 +375,7 @@
     </div>
   </div>
   <div id="text-fmt-panel" role="group" aria-label="Text size and width" hidden>
-    <span class="fmt-group"><span class="fmt-label">Size</span><button type="button" data-scale="-1" aria-label="Smaller text">A−</button><output id="text-scale" aria-live="polite">100%</output><button type="button" data-scale="1" aria-label="Larger text">A+</button></span>
+    <span class="fmt-group"><span class="fmt-label">Size</span><button type="button" data-scale="-1" aria-label="Smaller text">A−</button><output id="text-scale" aria-live="polite">100%</output><button type="button" data-scale="1" aria-label="Larger text">A+</button><input id="text-scale-range" type="range" min="0" max="15" step="1" aria-label="Text size"></span>
     <span class="fmt-group"><span class="fmt-label">Width</span><button type="button" data-width="normal" aria-pressed="true">Normal</button><button type="button" data-width="wide" aria-pressed="false">Wide</button><button type="button" data-width="full" aria-pressed="false">Full</button></span>
   </div>
   <p id="text-instruction">Select the text you want to copy.</p>
@@ -340,6 +387,7 @@
       <span class="spin" aria-hidden="true">✻</span>
       <span id="working-text"><span class="lead">Claude is </span><span id="working-what">working…</span></span>
       <button id="working-stop" type="button" title="Interrupt Claude (Esc)">Stop</button>
+      <button id="working-now" type="button" title="Send your queued message now, interrupting Claude (Ctrl+X Ctrl+S)" hidden>Send now</button>
       <button id="working-screen" type="button" aria-label="Screen and keys" title="Show the terminal screen and keys">Screen<span class="more"> &amp; keys</span></button>
     </div>
   </div>
@@ -374,6 +422,6 @@
     <button id="close-confirm" class="confirm" type="button">Close session</button>
   </div>
 </dialog>
-<script src="term.js?v=20261007-list-2"></script>
+<script src="term.js?v=20261017-prefs"></script>
 </body>
 </html>
