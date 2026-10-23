@@ -1068,6 +1068,241 @@
   });
   window.addEventListener('resize', () => hideMenu());
 
+  // ---- upload: files or a folder into a new folder on the server (api/uploads), then their paths are pasted into the terminal
+  // or the Read view's message box, and copied. What was picked is packed into one tar here (a folder keeps its tree) and sent
+  // in pieces: the proxy limits the size of one request, and a piece that fails is just sent again from where the server stands.
+  const $upload = document.getElementById('upload');
+  const $uploadDialog = document.getElementById('upload-dialog');
+  const $uploadPick = document.getElementById('upload-pick');
+  const $uploadFiles = document.getElementById('upload-files');
+  const $uploadFolder = document.getElementById('upload-folder');
+  const $uploadProgress = document.getElementById('upload-progress');
+  const $uploadWhat = document.getElementById('upload-what');
+  const $uploadBar = document.getElementById('upload-bar');
+  const $uploadCount = document.getElementById('upload-count');
+  const $uploadResult = document.getElementById('upload-result');
+  const $uploadDoneText = document.getElementById('upload-done-text');
+  const $uploadPaths = document.getElementById('upload-paths');
+  const $uploadError = document.getElementById('upload-error');
+  const $uploadClose = document.getElementById('upload-close');
+  const $uploadCopy = document.getElementById('upload-copy');
+  const $uploadPaste = document.getElementById('upload-paste');
+  const canPickFolder = 'webkitdirectory' in $uploadFolder;
+  if (!canPickFolder) { document.getElementById('upload-pick-folder').hidden = true; $uploadPick.querySelector('.upload-choices').classList.add('one'); }
+  let uploadTarget = 'term'; // where Paste puts the paths: 'term' or 'composer' (the Read view's message box)
+  let uploading = null; // { id, xhr, cancelled } while sending
+  let uploadText = '';
+  let uploadCopied = false;
+  const copyUploaded = () => (uploadCopied || !uploadText ? Promise.resolve(uploadCopied)
+    : navigator.clipboard?.writeText(uploadText.trim()).then(() => {
+      if (!uploadCopied) $uploadDoneText.textContent += ' (copied)';
+      return (uploadCopied = true);
+    }, () => false) ?? Promise.resolve(false));
+  const enc = new TextEncoder();
+  const formatBytes = (n) => (n < 1024 ? `${n} B` : n < 2 ** 20 ? `${(n / 1024).toFixed(0)} KB` : n < 2 ** 30 ? `${(n / 2 ** 20).toFixed(1)} MB` : `${(n / 2 ** 30).toFixed(2)} GB`);
+  // A shell word: left bare when that is safe, otherwise in single quotes.
+  const shellWord = (p) => (/^[\w@%+=:,./~-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`);
+  function tarHeader(name, size, mtime, type) {
+    const h = new Uint8Array(512);
+    const put = (text, at, len) => h.set(enc.encode(text).subarray(0, len), at);
+    const oct = (n, len) => `${n.toString(8).padStart(len - 1, '0')}\0`;
+    put(name, 0, 100);
+    put(oct(0o644, 8), 100, 8);
+    put(oct(0, 8), 108, 8);
+    put(oct(0, 8), 116, 8);
+    put(oct(size, 12), 124, 12);
+    put(oct(mtime, 12), 136, 12);
+    put('        ', 148, 8);
+    put(type, 156, 1);
+    put('ustar\0' + '00', 257, 8);
+    let sum = 0;
+    for (const b of h) sum += b;
+    put(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 8);
+    return h;
+  }
+  const pad = (n) => new Uint8Array((512 - (n % 512)) % 512);
+  // ustar holds names of up to 100 ASCII bytes; anything longer or non-ASCII (中文 names) goes in a pax record before the entry.
+  function tarOf(entries) {
+    const parts = [];
+    for (const { name, file } of entries) {
+      const mtime = Math.floor((file.lastModified || Date.now()) / 1000);
+      if (enc.encode(name).length > 100 || /[^\x20-\x7e]/.test(name)) {
+        const body = ` path=${name}\n`; // "<length> path=<name>\n", where <length> counts its own digits too
+        const n = enc.encode(body).length;
+        let len = n + 1;
+        while (len !== n + String(len).length) len = n + String(len).length;
+        const record = enc.encode(`${len}${body}`);
+        parts.push(tarHeader('PaxHeader', record.length, mtime, 'x'), record, pad(record.length));
+      }
+      parts.push(tarHeader(name.replace(/[^\x20-\x7e]/g, '_').slice(-100), file.size, mtime, '0'), file, pad(file.size));
+    }
+    parts.push(new Uint8Array(1024));
+    return new Blob(parts);
+  }
+  // Names as the tar will hold them: no empty, '.' or '..' parts; two picked files with one name (photos often are
+  // image.jpg) become "image.jpg" and "image (2).jpg".
+  function tarEntries(files, folder) {
+    const taken = new Set();
+    return files.map((file) => {
+      let name = (folder && file.webkitRelativePath || file.name).split('/').filter((p) => p && p !== '.' && p !== '..').join('/').replace(/[\u0000-\u001f\u007f]/g, '_') || 'file';
+      if (!folder) {
+        const dot = name.lastIndexOf('.') > 0 ? name.lastIndexOf('.') : name.length;
+        for (let i = 2; taken.has(name); i++) name = `${name.slice(0, dot).replace(/ \(\d+\)$/, '')} (${i})${name.slice(dot)}`;
+        taken.add(name);
+      }
+      return { name, file };
+    });
+  }
+  function uploadView(state) {
+    $uploadPick.hidden = state !== 'pick';
+    $uploadProgress.hidden = state !== 'sending';
+    $uploadResult.hidden = state !== 'done';
+    $uploadCopy.hidden = $uploadPaste.hidden = state !== 'done';
+    if (state !== 'done') $uploadError.hidden = true;
+    $uploadClose.textContent = state === 'done' ? 'Done' : 'Cancel';
+  }
+  function openUpload(target) {
+    if ($uploadDialog.open) return;
+    uploadTarget = target;
+    hideMenu();
+    hideCmdMenu();
+    uploadView('pick');
+    $uploadDialog.showModal();
+  }
+  const uploadApi = (method, endpoint, body) => fetch(`api/uploads${endpoint}`, {
+    method, credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' }, body: body && JSON.stringify(body),
+  });
+  // One piece with XMLHttpRequest, for its upload progress (fetch has none): resolves with { status, body }.
+  const sendPiece = (id, at, blob, onProgress) => new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    uploading.xhr = xhr;
+    xhr.open('PUT', `api/uploads/${id}?offset=${at}`);
+    xhr.setRequestHeader('content-type', 'application/octet-stream');
+    xhr.upload.onprogress = (e) => onProgress(e.loaded);
+    xhr.onload = () => { let body = {}; try { body = JSON.parse(xhr.responseText); } catch { /* not JSON */ } resolve({ status: xhr.status, body }); };
+    xhr.onerror = xhr.onabort = xhr.ontimeout = () => resolve({ status: 0, body: {} });
+    xhr.send(blob);
+  });
+  async function uploadPicked(files, folder) {
+    if (!files.length) return;
+    const entries = tarEntries(files, folder);
+    const top = [...new Set(entries.map((e) => e.name.split('/')[0]))];
+    const tar = tarOf(entries);
+    const bytes = files.reduce((n, f) => n + f.size, 0);
+    $uploadWhat.textContent = folder ? `Folder “${top[0]}”: ${files.length} file${files.length === 1 ? '' : 's'}, ${formatBytes(bytes)}`
+      : files.length === 1 ? `“${top[0]}”, ${formatBytes(bytes)}` : `${files.length} files, ${formatBytes(bytes)}`;
+    $uploadBar.value = 0;
+    $uploadCount.textContent = 'Starting…';
+    uploadView('sending');
+    const job = uploading = { id: null, xhr: null, cancelled: false };
+    const fail = (message) => { if (job.cancelled) return; uploading = null; uploadView('pick'); $uploadError.textContent = message; $uploadError.hidden = false; };
+    try {
+      let res = await uploadApi('POST', '', { size: tar.size });
+      if (!res.ok) { const why = (await res.json().catch(() => ({}))).error; return fail(`Upload refused: ${why || `HTTP ${res.status}`}`); }
+      const { id, piece: max } = await res.json();
+      job.id = id;
+      const piece = Math.min(max || 8 << 20, 8 << 20);
+      let at = 0;
+      let failures = 0;
+      const started = Date.now();
+      while (at < tar.size) {
+        if (job.cancelled) return;
+        const r = await sendPiece(id, at, tar.slice(at, Math.min(tar.size, at + piece)), (loaded) => {
+          const done = Math.min(tar.size, at + loaded);
+          $uploadBar.value = done / tar.size;
+          const rate = done / Math.max(1, (Date.now() - started) / 1000);
+          $uploadCount.textContent = `${formatBytes(done)} of ${formatBytes(tar.size)}${done > 2 ** 20 ? ` · ${formatBytes(rate)}/s` : ''}`;
+        });
+        if (job.cancelled) return;
+        if ((r.status === 200 || r.status === 409) && Number.isSafeInteger(r.body.received)) { at = r.body.received; failures = 0; continue; }
+        if (r.status === 404) return fail('The upload was dropped by the server (it may have restarted). Try again.');
+        if (r.status && r.status < 500 && r.status !== 429) return fail(`Upload refused: ${r.body.error || `HTTP ${r.status}`}`);
+        if (++failures > 6) return fail('The connection keeps failing. Check your network and try again.');
+        $uploadCount.textContent = `Connection lost, retrying (${failures})…`;
+        await new Promise((resolve) => setTimeout(resolve, 1000 * failures));
+      }
+      $uploadBar.value = 1;
+      $uploadCount.textContent = 'Unpacking…';
+      res = await uploadApi('POST', `/${id}/done`, { top });
+      const body = await res.json().catch(() => ({}));
+      if (job.cancelled) return;
+      if (!res.ok || !Array.isArray(body.paths)) return fail(`Upload failed: ${body.error || `HTTP ${res.status}`}`);
+      uploading = null;
+      showUploaded(body.paths);
+    } catch {
+      fail('No connection. Check your network and try again.');
+    }
+  }
+  function showUploaded(paths) {
+    uploadText = `${paths.map(shellWord).join(' ')} `;
+    $uploadPaths.value = paths.join('\n');
+    const toComposer = uploadTarget === 'composer';
+    $uploadPaste.textContent = toComposer ? 'Add to message' : 'Paste into terminal';
+    uploadView('done');
+    $uploadPaths.style.height = 'auto'; // as tall as the wrapped paths (the CSS caps it)
+    $uploadPaths.style.height = `${$uploadPaths.scrollHeight + 2}px`;
+    $uploadPaste.hidden = toComposer ? $composerInput.disabled : readOnly;
+    $uploadDoneText.textContent = `Uploaded ${paths.length === 1 ? 'to' : `${paths.length} items to`}:`;
+    // Copied at once where the browser allows it. Safari only lets a tap write the clipboard, so there the tap on Paste,
+    // Copy or Done does it.
+    uploadCopied = false;
+    void copyUploaded();
+    ($uploadPaste.hidden ? $uploadCopy : $uploadPaste).focus();
+  }
+  function cancelUpload() {
+    const job = uploading;
+    uploading = null;
+    if (!job) return;
+    job.cancelled = true;
+    job.xhr?.abort();
+    if (job.id) uploadApi('DELETE', `/${job.id}`).catch(() => {});
+  }
+  $upload.addEventListener('click', () => openUpload('term'));
+  document.getElementById('composer-attach').addEventListener('click', () => openUpload('composer'));
+  document.getElementById('upload-pick-files').addEventListener('click', () => { $uploadFiles.value = ''; $uploadFiles.click(); });
+  document.getElementById('upload-pick-folder').addEventListener('click', () => { $uploadFolder.value = ''; $uploadFolder.click(); });
+  $uploadFiles.addEventListener('change', () => { void uploadPicked([...$uploadFiles.files], false); });
+  $uploadFolder.addEventListener('change', () => { void uploadPicked([...$uploadFolder.files], true); });
+  $uploadClose.addEventListener('click', () => {
+    if (!$uploadResult.hidden) void copyUploaded();
+    $uploadDialog.close();
+  });
+  $uploadDialog.addEventListener('close', () => {
+    cancelUpload();
+    if (uploadTarget === 'composer' && $textDialog.open) return;
+    if (!coarse) w?.term?.focus();
+  });
+  $uploadCopy.addEventListener('click', async () => {
+    uploadCopied = false;
+    let ok = await copyUploaded();
+    if (!ok) { // no Clipboard API: copy the box's text, now the one line that is pasted
+      $uploadPaths.value = uploadText.trim();
+      $uploadPaths.focus();
+      $uploadPaths.select();
+      try { ok = document.execCommand('copy'); } catch { /* blocked */ }
+    }
+    $uploadCopy.textContent = ok ? 'Copied' : 'Select and copy';
+    setTimeout(() => { $uploadCopy.textContent = 'Copy'; }, 1600);
+  });
+  $uploadPaste.addEventListener('click', () => {
+    void copyUploaded();
+    $uploadDialog.close();
+    if (uploadTarget === 'composer') {
+      const value = $composerInput.value;
+      const at = $composerInput.selectionStart ?? value.length;
+      const before = value.slice(0, at);
+      const insert = `${before && !/\s$/.test(before) ? ' ' : ''}${uploadText}`;
+      $composerInput.value = before + insert + value.slice($composerInput.selectionEnd ?? at);
+      $composerInput.setSelectionRange(at + insert.length, at + insert.length);
+      autoGrow();
+      syncSend();
+      $composerInput.focus();
+    } else {
+      w?.term?.paste(uploadText); // bracketed when the program asked for it: Claude Code then attaches a pasted image path
+      if (!coarse) w?.term?.focus();
+    }
+  });
+
   const updateUrl = () => {
     const url = new URL(location.href);
     url.searchParams.set('s', name);

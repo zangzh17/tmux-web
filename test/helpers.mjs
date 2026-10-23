@@ -36,7 +36,7 @@ export async function startApi(extraEnv = {}) {
   const env = { ...process.env, TMUX_WEB_API_SOCK: socket, TMUX_BIN: wrapper, TMUX_WEB_PREVIEW: '0',
     CF_ACCESS_TEAM_DOMAIN: 'test.cloudflareaccess.com', CF_ACCESS_AUD: 'test-aud',
     CF_ACCESS_CERTS_URL: `http://127.0.0.1:${certs.address().port}/certs`, ALLOWED_EMAILS: 'owner@example.com', TMUX_WEB_USERS: usersFile,
-    TMUX_WEB_PREFS: path.join(dir, 'prefs.json'), ...extraEnv }; // never the real prefs file either
+    TMUX_WEB_PREFS: path.join(dir, 'prefs.json'), TMUX_WEB_UPLOADS: path.join(dir, 'uploads'), TMUX_WEB_UPLOAD_RESERVE_MB: '0', ...extraEnv }; // never the real prefs file or uploads either
   delete env.TMUX; // never inherit the developer's own tmux client
   delete env.TMUX_PANE;
   const server = spawn(process.execPath, [path.resolve('server.mjs')], { cwd: path.resolve('.'), stdio: 'ignore', env });
@@ -45,9 +45,9 @@ export async function startApi(extraEnv = {}) {
     await delay(100);
   }
 
-  // `body` (optional) is sent as JSON, or as-is when it is a string; without it a POST sends `{}`.
+  // `body` (optional) is sent as JSON, or as-is when it is a string or a Buffer; without it a POST sends `{}`.
   const request = (method, endpoint, extra = {}, body) => new Promise((resolve, reject) => {
-    const payload = body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : method === 'POST' ? '{}' : undefined;
+    const payload = body !== undefined ? (typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body)) : method === 'POST' ? '{}' : undefined;
     // framed explicitly: node sends the body of a DELETE (or GET) unframed otherwise
     const headers = { host: 'localhost:8890', origin: 'http://localhost:8890', 'content-type': 'application/json', 'cf-access-jwt-assertion': token,
       ...(payload === undefined ? {} : { 'content-length': Buffer.byteLength(payload) }), ...extra };

@@ -9,6 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 const SOCK = process.env.TMUX_WEB_API_SOCK
   || path.join(process.env.XDG_RUNTIME_DIR || os.tmpdir(), 'tmux-web', 'api.sock');
@@ -300,16 +302,18 @@ const missingSession = (e) => /can't find session|no server running|error connec
 // display-message/capture-pane take a target-pane, so a dead session ID is reported as a missing pane.
 const missingTarget = (e) => missingSession(e) || /can't find (?:pane|window)/i.test(e.stderr || '');
 
-async function readMutation(req, limit = 1024) {
-  // Every mutation requires JSON and a matching Origin, including deletion.
-  const origin = req.headers.origin;
+// A mutation must come from this site's own pages: its Origin header names this host.
+function sameOrigin(req) {
   const host = req.headers.host;
   let source;
-  try { source = new URL(origin); } catch { return { status: 403, body: { error: 'origin not allowed' } }; }
-  if (!host || source.host !== host || (source.protocol !== 'https:'
-    && !(source.protocol === 'http:' && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host)))) {
-    return { status: 403, body: { error: 'origin not allowed' } };
-  }
+  try { source = new URL(req.headers.origin); } catch { return false; }
+  return !!host && source.host === host && (source.protocol === 'https:'
+    || (source.protocol === 'http:' && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host)));
+}
+
+async function readMutation(req, limit = 1024) {
+  // Every mutation requires JSON and a matching Origin, including deletion.
+  if (!sameOrigin(req)) return { status: 403, body: { error: 'origin not allowed' } };
   if (!/^application\/json(?:\s*;|\s*$)/i.test(req.headers['content-type'] || '')) {
     return { status: 415, body: { error: 'expected JSON' } };
   }
@@ -765,6 +769,129 @@ async function sessionInput(req, id) {
   return { status: 200, body: { ok: true } };
 }
 
+// ---- uploads: files and folders from the browser, put where a session can use them (the page pastes their paths)
+// The page packs what was picked into one tar (a folder keeps its tree; browsers send no empty folders) and sends it in pieces
+// of at most UPLOAD_PIECE bytes, so a big upload stays under the proxy's request size limit and a failed piece is simply resent:
+//   POST   /api/uploads { size }             -> 201 { id }      size = the whole tar, at most UPLOAD_MAX
+//   PUT    /api/uploads/:id?offset=N <bytes> -> { received }    409 { received } when N is not where the upload stands
+//   POST   /api/uploads/:id/done { top }     -> { dir, paths }  unpacked into a new folder under UPLOADS; paths = its top-level
+//                                                                entries, in the order of `top` (the names the page packed)
+//   DELETE /api/uploads/:id                  -> { ok }          cancel
+// Only plain files and folders are unpacked: no links or devices, and no name that leaves the folder. A folder is removed
+// UPLOAD_DAYS after its upload, an unfinished upload after a day (or when the API restarts: the list of uploads is in memory).
+// TMUX_WEB_UPLOADS (default ~/.cache/tmux-web/uploads), TMUX_WEB_UPLOAD_MAX_MB (4096), TMUX_WEB_UPLOAD_DAYS (7).
+const UPLOADS = process.env.TMUX_WEB_UPLOADS || path.join(os.homedir(), '.cache', 'tmux-web', 'uploads');
+const UPLOAD_PARTS = path.join(UPLOADS, '.parts');
+const UPLOAD_MAX = (+process.env.TMUX_WEB_UPLOAD_MAX_MB > 0 ? +process.env.TMUX_WEB_UPLOAD_MAX_MB : 4096) * 2 ** 20;
+const UPLOAD_DAYS = +process.env.TMUX_WEB_UPLOAD_DAYS > 0 ? +process.env.TMUX_WEB_UPLOAD_DAYS : 7;
+const UPLOAD_RESERVE = (process.env.TMUX_WEB_UPLOAD_RESERVE_MB ? +process.env.TMUX_WEB_UPLOAD_RESERVE_MB : 1024) * 2 ** 20; // disk left free
+const UPLOAD_PIECE = 16 << 20;
+const UPLOAD_ID = /^[0-9a-f]{24}$(?![\s\S])/;
+const UPLOAD_DIR = /^\d{8}-\d{6}-[0-9a-f]{4}$/;
+const TAR = process.env.TAR_BIN || 'tar';
+const uploads = new Map(); // id -> { email, size, part, busy, at }
+const sizeOf = (file) => { try { return fs.statSync(file).size; } catch { return 0; } };
+const run = (exe, args, maxBuffer = 1 << 20) => new Promise((resolve, reject) => {
+  execFile(exe, args, { timeout: 15 * 60_000, maxBuffer, env: { ...process.env, LC_ALL: 'C.UTF-8' } }, (err, stdout, stderr) => {
+    if (err) reject(Object.assign(err, { stderr })); else resolve(stdout);
+  });
+});
+function sweepUploads() {
+  const now = Date.now();
+  for (const [id, up] of uploads) if (!up.busy && now - up.at > 86400_000) { uploads.delete(id); fs.rmSync(up.part, { force: true }); }
+  for (const [dir, test, age] of [[UPLOADS, (n) => UPLOAD_DIR.test(n), UPLOAD_DAYS * 86400_000], [UPLOAD_PARTS, (n) => /^[0-9a-f]{24}\.tar$/.test(n), 86400_000]]) {
+    let names = [];
+    try { names = fs.readdirSync(dir).filter(test); } catch { continue; }
+    for (const n of names) {
+      const file = path.join(dir, n);
+      try { if (now - fs.statSync(file).mtimeMs > age && !uploads.get(n.slice(0, 24))?.busy) fs.rmSync(file, { recursive: true, force: true }); } catch { /* gone */ }
+    }
+  }
+}
+async function startUpload(req, user) {
+  const input = await readMutation(req);
+  if (input.status) return input;
+  const { size } = input.data;
+  if (!Number.isSafeInteger(size) || size < 1024 || size % 512) return { status: 400, body: { error: 'invalid size' } };
+  if (size > UPLOAD_MAX) return { status: 413, body: { error: `too large: at most ${Math.round(UPLOAD_MAX / 2 ** 20)} MB` } };
+  if (uploads.size >= 32) sweepUploads();
+  if (uploads.size >= 32) return { status: 429, body: { error: 'too many uploads at once' } };
+  fs.mkdirSync(UPLOAD_PARTS, { recursive: true, mode: 0o700 });
+  const { bavail, bsize } = await fs.promises.statfs(UPLOADS);
+  if (bavail * bsize < size * 2 + UPLOAD_RESERVE) return { status: 507, body: { error: 'not enough disk space on the server' } };
+  const id = crypto.randomBytes(12).toString('hex');
+  const part = path.join(UPLOAD_PARTS, `${id}.tar`);
+  fs.writeFileSync(part, '', { mode: 0o600 });
+  uploads.set(id, { email: user.email, size, part, busy: false, at: Date.now() });
+  return { status: 201, body: { id, piece: UPLOAD_PIECE } };
+}
+const uploadOf = (user, id) => { const up = uploads.get(id); return up && up.email === user.email ? up : null; };
+async function uploadPiece(req, user, id, query) {
+  const discard = (result) => { req.resume(); return result; };
+  if (!sameOrigin(req)) return discard({ status: 403, body: { error: 'origin not allowed' } });
+  const up = uploadOf(user, id);
+  if (!up) return discard({ status: 404, body: { error: 'upload not found' } });
+  const offset = num(query, 'offset');
+  const received = sizeOf(up.part);
+  if (up.busy || offset !== received) return discard({ status: 409, body: { received } });
+  // counted as it arrives: a proxy may forward the piece chunked, without a Content-Length
+  const limit = Math.min(UPLOAD_PIECE, up.size - received);
+  if (+req.headers['content-length'] > limit) return discard({ status: 413, body: { error: 'piece too large' } });
+  let bytes = 0;
+  const counter = new Transform({ transform(chunk, _enc, done) { bytes += chunk.length; done(bytes > limit ? new Error('too large') : null, chunk); } });
+  up.busy = true;
+  up.at = Date.now();
+  let complete = false;
+  try { await pipeline(req, counter, fs.createWriteStream(up.part, { flags: 'a' })); complete = true; } catch { /* cut off: the page goes on from what arrived */ }
+  finally { up.busy = false; }
+  if (bytes > limit) { fs.truncateSync(up.part, received); return { status: 413, body: { error: 'piece too large' } }; }
+  return { status: complete ? 200 : 409, body: { received: sizeOf(up.part) } };
+}
+function newUploadDir() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  const dir = path.join(UPLOADS, `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${crypto.randomBytes(2).toString('hex')}`);
+  fs.mkdirSync(dir, { mode: 0o700 });
+  return dir;
+}
+async function finishUpload(req, user, id) {
+  const input = await readMutation(req, 64 << 10);
+  if (input.status) return input;
+  const up = uploadOf(user, id);
+  if (!up) return { status: 404, body: { error: 'upload not found' } };
+  if (up.busy || sizeOf(up.part) !== up.size) return { status: 409, body: { received: sizeOf(up.part) } };
+  const top = Array.isArray(input.data.top) ? input.data.top.filter((n) => typeof n === 'string') : [];
+  up.busy = true;
+  let dir = null;
+  try {
+    // tar -tv starts every line with the entry's type: '-' file, 'd' folder (l/h links, c/b/p devices and fifos are refused)
+    const listing = await run(TAR, ['-tvf', up.part], 256 << 20);
+    if (listing.split('\n').some((l) => l && !/^[-d]/.test(l))) return { status: 400, body: { error: 'only files and folders can be uploaded' } };
+    const names = (await run(TAR, ['-tf', up.part], 256 << 20)).split('\n').filter(Boolean);
+    if (!names.length || names.some((n) => n.startsWith('/') || n.split('/').includes('..'))) return { status: 400, body: { error: 'invalid file names' } };
+    dir = newUploadDir();
+    await run(TAR, ['-xf', up.part, '-C', dir, '--no-same-owner', '--no-same-permissions']);
+    const entries = fs.readdirSync(dir);
+    const ordered = [...top.filter((n) => entries.includes(n)), ...entries.filter((n) => !top.includes(n)).sort()];
+    return { status: 200, body: { dir, paths: [...new Set(ordered)].map((n) => path.join(dir, n)) } };
+  } catch (e) {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+    if (e.stderr !== undefined) { console.error('[tmux-web] upload unpack failed:', String(e.stderr).trim().split('\n')[0]); return { status: 400, body: { error: 'could not unpack the upload' } }; }
+    throw e;
+  } finally {
+    uploads.delete(id);
+    fs.rmSync(up.part, { force: true });
+  }
+}
+function cancelUpload(req, user, id) {
+  if (!sameOrigin(req)) return { status: 403, body: { error: 'origin not allowed' } };
+  const up = uploadOf(user, id);
+  if (!up) return { status: 404, body: { error: 'upload not found' } };
+  uploads.delete(id);
+  fs.rmSync(up.part, { force: true }); // a piece still arriving writes into an unlinked file
+  return { status: 200, body: { ok: true } };
+}
+
 // ---- HTTP
 function send(res, status, body, type = 'text/plain; charset=utf-8') {
   res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
@@ -809,7 +936,15 @@ const server = http.createServer(async (req, res) => {
       if (view) return sendJson(res, await (view === 'history' ? sessionHistory : sessionTranscript)(id, searchParams));
       return sendJson(res, await changeSession(req, id));
     }
-    if (pathname === '/api/sessions' || pathname === '/api/me' || pathname === '/api/prefs' || pathname === '/verify') return send(res, 405, 'method not allowed');
+    if (pathname === '/api/uploads' && req.method === 'POST') return sendJson(res, await startUpload(req, user));
+    const upload = /^\/api\/uploads\/([^/]+)(\/done)?$/.exec(pathname);
+    if (upload) {
+      if (!(upload[2] ? ['POST'] : ['PUT', 'DELETE']).includes(req.method)) return send(res, 405, 'method not allowed');
+      if (!UPLOAD_ID.test(upload[1])) return sendJson(res, { status: 404, body: { error: 'upload not found' } });
+      if (upload[2]) return sendJson(res, await finishUpload(req, user, upload[1]));
+      return sendJson(res, req.method === 'PUT' ? await uploadPiece(req, user, upload[1], searchParams) : cancelUpload(req, user, upload[1]));
+    }
+    if (pathname === '/api/sessions' || pathname === '/api/me' || pathname === '/api/prefs' || pathname === '/api/uploads' || pathname === '/verify') return send(res, 405, 'method not allowed');
     return send(res, 404, 'not found');
   } catch (e) {
     console.error('[tmux-web] handler error:', e.message);
@@ -817,6 +952,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+sweepUploads();
+setInterval(sweepUploads, 3600_000).unref();
 fs.mkdirSync(path.dirname(SOCK), { recursive: true, mode: 0o700 });
 fs.rmSync(SOCK, { force: true });
 server.listen(SOCK, () => {

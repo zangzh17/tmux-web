@@ -68,6 +68,16 @@ iPhone keep their own sizes): in the browser, and on the server (`GET/PUT /api/p
 `~/.local/state/tmux-web/prefs.json`, mode 600, only whitelisted keys), so they survive Safari clearing site data and reach
 another device of the same kind. A Claude session opens in Read only if Read (or Text) was the last view used; after **Done**
 the next one opens in the terminal.
+**Upload** (header, and the same button left of the Read view's message box) sends files, photos or a whole folder to
+a new folder under `TMUX_WEB_UPLOADS` (default `~/.cache/tmux-web/uploads/<date>-<time>-<hex>/`, mode 700). The page packs the
+selection into one tar (a folder keeps its tree; browsers send no empty folders; iOS may not offer folder picking) and sends it in
+8 MB pieces (`POST /api/uploads {size}`, `PUT /api/uploads/:id?offset=N`, `POST /api/uploads/:id/done`, `DELETE` cancels), so each
+request stays under Cloudflare's body limit and a dropped piece is resent from where the server stands. The server unpacks it with
+GNU tar after checking that it holds only plain files and folders with names inside the folder. Then **Paste into terminal**
+(bracketed paste, no Enter; Claude Code turns a pasted image path into an attachment) or **Add to message** in Read puts the
+shell-quoted paths in, and they are copied to the clipboard (Safari only allows that on a tap: Paste, Copy or Done).
+Limits: `TMUX_WEB_UPLOAD_MAX_MB` (4096) per upload, 1 GB of disk kept free; folders are deleted after `TMUX_WEB_UPLOAD_DAYS` (7),
+unfinished uploads after a day or an API restart.
 When ttyd gives up on its socket and shows "Press ⏎ to Reconnect" (it does after any socket error, which is how iOS reports a
 connection dropped while the page was in the background, and after a clean close), the page checks that the session still
 exists and presses Enter for it (or loads the terminal again); at most five tries in two minutes. On a phone held sideways, Full
