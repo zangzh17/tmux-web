@@ -36,7 +36,8 @@ export async function startApi(extraEnv = {}) {
   const env = { ...process.env, TMUX_WEB_API_SOCK: socket, TMUX_BIN: wrapper, TMUX_WEB_PREVIEW: '0',
     CF_ACCESS_TEAM_DOMAIN: 'test.cloudflareaccess.com', CF_ACCESS_AUD: 'test-aud',
     CF_ACCESS_CERTS_URL: `http://127.0.0.1:${certs.address().port}/certs`, ALLOWED_EMAILS: 'owner@example.com', TMUX_WEB_USERS: usersFile,
-    TMUX_WEB_PREFS: path.join(dir, 'prefs.json'), TMUX_WEB_UPLOADS: path.join(dir, 'uploads'), TMUX_WEB_UPLOAD_RESERVE_MB: '0', ...extraEnv }; // never the real prefs file or uploads either
+    TMUX_WEB_PREFS: path.join(dir, 'prefs.json'), TMUX_WEB_UPLOADS: path.join(dir, 'uploads'), TMUX_WEB_UPLOAD_RESERVE_MB: '0', // never the real prefs file or uploads either
+    TMUX_WEB_ACCOUNT: 'main', TMUX_WEB_RUN: path.join(dir, 'run'), TMUX_WEB_ACCOUNTS_DIR: path.join(dir, 'accounts'), ...extraEnv }; // nor the real accounts
   delete env.TMUX; // never inherit the developer's own tmux client
   delete env.TMUX_PANE;
   const server = spawn(process.execPath, [path.resolve('server.mjs')], { cwd: path.resolve('.'), stdio: 'ignore', env });

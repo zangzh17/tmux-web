@@ -1,0 +1,11 @@
+# tmux-web with several Unix accounts: an account other than the home one follows its switch file (the admin flips it on the
+# page, or by writing "on"/"off" into the file).
+[Unit]
+Description=tmux-web: follow the switch of account %u, /etc/tmux-web/accounts/%u
+
+[Path]
+PathChanged=/etc/tmux-web/accounts/%u
+Unit=tmux-web-switch.service
+
+[Install]
+WantedBy=default.target

@@ -20,6 +20,19 @@
   const $renameCancel = document.getElementById('rename-cancel');
   const $ownerFilter = document.getElementById('owner-filter');
   const $ownerOptions = document.getElementById('owner-options');
+  const $heading = document.querySelector('h1');
+  const $accountBar = document.getElementById('account-bar');
+  const $accountOptions = document.getElementById('account-options');
+  const $accountOff = document.getElementById('account-off');
+  const $accountOffText = document.getElementById('account-off-text');
+  const $accountOn = document.getElementById('account-on');
+  const $shareDialog = document.getElementById('share-dialog');
+  const $sharePeople = document.getElementById('share-people');
+  const $shareError = document.getElementById('share-error');
+  const $shareSave = document.getElementById('share-save');
+  const $shareCancel = document.getElementById('share-cancel');
+  let shareTarget = null;
+  let sharing = false;
   let closeTarget = null;
   let closing = false;
   let renameTarget = null;
@@ -35,7 +48,8 @@
   } catch { /* private mode */ }
   // Whose sessions to list: 'me' (started here), 'local' (started outside the web page) and other people's emails.
   // Only people the server says we may view are offered; it also ignores anything we are not allowed to ask for.
-  let me = null; // from /api/me; null until known, { canViewOthers: false } on a server without it
+  let me = null; // from api/me; null until known, { canViewOthers: false } on a server without it
+  let meStatus = 0; // HTTP status of the last api/me (0: none yet, or no answer)
   let selected = new Set(['me', 'local']);
   try {
     const saved = JSON.parse(localStorage.getItem('tmuxweb.owners'));
@@ -61,9 +75,19 @@
 
   // Everything about owners is multi-user: a server without it (no users.json) says `multiUser: false` and none of it is shown.
   function ownerTag(s) {
-    if (!me?.multiUser || s.mine) return [];
-    if (!s.owner) return [el('span', 'owner-tag local', 'Local')];
-    return [el('span', `owner-tag${s.access === 'view' ? ' view' : ''}`, s.owner.name), ...(s.access === 'view' ? [el('span', 'owner-tag view', 'View only')] : [])];
+    if (!me?.multiUser) return [];
+    const tags = [];
+    if (!s.mine) {
+      if (!s.owner) tags.push(el('span', 'owner-tag local', s.sharedWithMe ? 'Shared with you' : 'Local'));
+      else tags.push(el('span', `owner-tag${s.access === 'view' ? ' view' : ''}`, s.owner.name));
+      if (s.access === 'view') tags.push(el('span', 'owner-tag view', 'View only'));
+    }
+    if (s.share?.length) {
+      const shared = el('span', 'owner-tag shared', `Shared with ${s.share.map((p) => p.name).join(', ')}`);
+      shared.title = s.share.map((p) => `${p.name}: ${p.level === 'full' ? 'control' : 'view only'}`).join(' · ');
+      tags.push(shared);
+    }
+    return tags;
   }
 
   function card(s, now) {
@@ -103,6 +127,16 @@
       $renameInput.focus();
       $renameInput.select();
     });
+    // shared with people of this account (the server says who could be); not with the session's own owner
+    const sharable = s.access === 'full' && (me?.sharePeople || []).some((p) => p.email !== s.owner?.email);
+    const share = el('button', 'session-share');
+    share.type = 'button';
+    share.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+    share.title = s.share?.length ? `Shared with ${s.share.map((p) => p.name).join(', ')}: change` : `Share session: ${s.name}`;
+    share.setAttribute('aria-label', share.title);
+    share.setAttribute('aria-haspopup', 'dialog');
+    if (s.share?.length) share.dataset.shared = '';
+    share.addEventListener('click', () => openShare(s));
     const close = el('button', 'session-close', 'Close');
     close.type = 'button';
     close.title = `Close session: ${s.name}`;
@@ -118,13 +152,14 @@
       $closeCancel.focus();
     });
     if (s.access === 'view') li.append(a); // somebody else's session: look, don't touch
-    else { actions.append(rename, close); li.append(a, actions); }
+    else { actions.append(...(sharable ? [share] : []), rename, close); li.append(a, actions); }
+    li.classList.toggle('shareable', sharable && s.access !== 'view');
     return li;
   }
 
   function render(data) {
     latestData = data;
-    const json = JSON.stringify({ data, previewLines, who: me?.email });
+    const json = JSON.stringify({ data, previewLines, who: me?.email, sharePeople: me?.sharePeople });
     if (json === lastJson) return;
     lastJson = json;
     $list.replaceChildren();
@@ -152,7 +187,11 @@
     const someoneElse = !!me?.canViewOthers && me.people.length > 0;
     $ownerFilter.hidden = !someoneElse;
     $whoami.hidden = !(me?.multiUser && me.email);
-    if (!$whoami.hidden) $whoami.textContent = `Signed in as ${me.name} · ${me.email}`;
+    const elsewhere = !!me?.myAccount && me.account !== me.myAccount; // an admin in another account
+    if (!$whoami.hidden) $whoami.textContent = `Signed in as ${me.name} · ${me.email}${elsewhere ? ` · in the ${me.account} account` : ''}`;
+    $heading.textContent = 'Tmux sessions';
+    if (elsewhere) $heading.append(el('span', 'muted', ` · ${me.account}`));
+    document.title = elsewhere ? `Tmux sessions · ${me.account}` : 'Tmux sessions';
     if (!someoneElse) { $ownerOptions.replaceChildren(); return; }
     const choices = [{ key: 'me', label: 'Mine' }];
     if (me.local > 0 || selected.has('local')) choices.push({ key: 'local', label: 'Local', count: me.local });
@@ -180,13 +219,119 @@
     $ownerOptions.replaceChildren(...buttons, every);
   }
   async function loadMe() {
+    meStatus = 0;
     try {
       const res = await fetch('api/me', { cache: 'no-store', credentials: 'same-origin' });
+      meStatus = res.status;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       me = await res.json();
     } catch { me ||= { canViewOthers: false }; }
     sanitizeSelection();
     renderOwners();
+  }
+
+  // ---- accounts. This page may be another Unix account's (/a/<account>/: its api/ and term/ go to that account's own backend).
+  // Which accounts there are, and their on/off switches, come from the home backend (/api/accounts), which answers even while
+  // this account's backend is off. Only an admin gets more than their own account, and the switches.
+  const pathAccount = /^\/a\/([a-z_][a-z0-9_-]{0,31})\//.exec(location.pathname)?.[1] || null;
+  let accounts = null; // { home, admin, accounts: [{ name, home, on, up }] }
+  const switching = new Set();
+  const accountUrl = (name) => (name === accounts?.home ? '/' : `/a/${name}/`);
+  const currentAccount = () => (meStatus === 200 && me?.account) || pathAccount || accounts?.home;
+  const stateOf = (a) => (a.home || (a.on && a.up) ? 'up' : a.on || a.up ? 'busy' : 'off'); // busy: starting or stopping
+  const STATE_TEXT = { up: 'running', busy: 'starting or stopping', off: 'off' };
+  async function loadAccounts() {
+    try {
+      const res = await fetch('/api/accounts', { cache: 'no-store', credentials: 'same-origin' });
+      if (res.ok) accounts = await res.json();
+    } catch { /* keep the last answer */ }
+  }
+  function renderAccounts() {
+    const list = accounts?.admin ? accounts.accounts : [];
+    $accountBar.hidden = list.length < 2;
+    if ($accountBar.hidden) { $accountOptions.replaceChildren(); return; }
+    const here = currentAccount();
+    $accountOptions.replaceChildren(...list.map((a) => {
+      const item = el('span', 'account-item');
+      const state = stateOf(a);
+      const chip = el('a', 'account-chip', a.name);
+      chip.href = accountUrl(a.name);
+      chip.prepend(el('span', `account-dot ${state}`));
+      chip.title = a.home ? `${a.name}: the home account` : `${a.name}: ${STATE_TEXT[state]}`;
+      chip.setAttribute('aria-label', chip.title);
+      if (a.name === here) chip.setAttribute('aria-current', 'page');
+      item.append(chip);
+      if (!a.home) {
+        const flip = el('button', `account-switch${a.on ? '' : ' turn-on'}`, a.on ? 'Turn off' : 'Turn on');
+        flip.type = 'button';
+        flip.setAttribute('aria-label', `${a.on ? 'Turn off' : 'Turn on'} the ${a.name} account`);
+        flip.title = a.on ? `Turn the ${a.name} account off here (its sessions keep running)` : `Turn the ${a.name} account on`;
+        flip.disabled = switching.has(a.name);
+        flip.addEventListener('click', () => flipAccount(a.name, !a.on));
+        item.append(flip);
+      }
+      return item;
+    }));
+  }
+  // The account's own systemd starts or stops its backend a second or two after the switch file changes.
+  async function flipAccount(name, on) {
+    if (!name || switching.has(name)) return;
+    switching.add(name);
+    renderAccounts();
+    $accountOn.disabled = true;
+    try {
+      const res = await fetch(`/api/accounts/${encodeURIComponent(name)}`, {
+        method: 'PUT', credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      for (const wait of [700, 1000, 1500, 2500]) {
+        await new Promise((resolve) => setTimeout(resolve, wait));
+        await loadAccounts();
+        if (accounts?.accounts.find((a) => a.name === name)?.up === on) break;
+      }
+    } catch {
+      $notice.textContent = `Could not turn the ${name} account ${on ? 'on' : 'off'}. Try again, or refresh and sign in again.`;
+      $notice.hidden = false;
+    } finally {
+      switching.delete(name);
+      $accountOn.disabled = false;
+      renderAccounts();
+      load();
+    }
+  }
+  $accountOn.addEventListener('click', () => flipAccount(currentAccount(), true));
+  // This page's account cannot be used now: its backend is off, or the person belongs to another account whose is.
+  function showOff(text, canTurnOn) {
+    document.body.classList.add('off');
+    $accountOff.hidden = false;
+    $accountOffText.textContent = text;
+    $accountOn.hidden = !canTurnOn;
+    $notice.hidden = true;
+  }
+  function hideOff() {
+    document.body.classList.remove('off');
+    $accountOff.hidden = true;
+  }
+  const OWN_OFF = 'The web terminal for your account is turned off. Ask an admin to turn it on; this page opens it as soon as it is.';
+  // false when the list cannot be shown here (off, or redirected to the person's own account)
+  function accountUsable() {
+    if (me?.allowed === false && meStatus === 200) {
+      // somebody of another account on this account's page: off to their own one when it runs
+      const mine = accounts?.accounts.find((a) => a.name === me.myAccount);
+      if (mine && stateOf(mine) === 'up') { location.replace(accountUrl(mine.name)); return false; }
+      showOff(OWN_OFF, false);
+      return false;
+    }
+    if (meStatus !== 200 && pathAccount) {
+      const here = accounts?.accounts.find((a) => a.name === pathAccount);
+      if (here && stateOf(here) !== 'up') {
+        const starting = here.on && !here.up;
+        showOff(starting ? `The ${here.name} account is starting…` : accounts.admin ? `The ${here.name} account is turned off here. Its sessions keep running.` : OWN_OFF, accounts.admin && !here.on);
+        return false;
+      }
+    }
+    hideOff();
+    return true;
   }
 
   function updatePreviewButtons() {
@@ -208,7 +353,12 @@
     const request = ++loadRequest;
     $refresh.classList.add('spin');
     try {
-      if (!me || me.canViewOthers) await loadMe(); // people and counts change; a plain user needs it only once
+      if (!me || me.canViewOthers || meStatus !== 200) await loadMe(); // people and counts change; a plain user needs it only once
+      if (me.admin || accounts?.admin || me.allowed === false || meStatus !== 200) await loadAccounts();
+      if (request !== loadRequest) return;
+      renderAccounts();
+      if (!accountUsable()) return;
+      if (meStatus !== 200) throw new Error(`HTTP ${meStatus}`);
       const query = me.canViewOthers ? `?${[...selected].map((v) => `owner=${encodeURIComponent(v)}`).join('&')}` : '';
       const res = await fetch(`api/sessions${query}`, { cache: 'no-store', credentials: 'same-origin' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -218,6 +368,7 @@
       $notice.hidden = true;
     } catch (e) {
       if (request !== loadRequest) return;
+      meStatus = 0; // ask again next time: this account's backend may have just been turned off
       $notice.textContent = 'Could not load sessions. Retrying automatically. If this continues, refresh and sign in again.';
       $notice.hidden = false;
       if (!lastJson) $list.replaceChildren();
@@ -276,6 +427,70 @@
     renaming = false;
     $renameSave.disabled = $renameCancel.disabled = $renameInput.disabled = false;
     $renameSave.textContent = 'Save';
+  });
+  // ---- share: Off / View / Control for each person of this account who could get it
+  function openShare(s) {
+    if (sharing || $shareDialog.open) return;
+    shareTarget = { id: s.id, instance: s.instance };
+    document.getElementById('share-name').textContent = s.name;
+    const current = new Map((s.share || []).map((p) => [p.email, p.level]));
+    $sharePeople.replaceChildren(...me.sharePeople.filter((p) => p.email !== s.owner?.email).map((p, i) => {
+      const row = el('div', 'share-row');
+      const who = el('div', 'share-who', p.name);
+      who.append(el('small', null, p.email));
+      const levels = el('div', 'share-levels');
+      levels.setAttribute('role', 'radiogroup');
+      levels.setAttribute('aria-label', `Share with ${p.name}`);
+      for (const [value, label] of [['', 'Off'], ['view', 'View'], ['full', 'Control']]) {
+        const option = el('label');
+        const input = el('input');
+        input.type = 'radio';
+        input.name = `share-${i}`;
+        input.value = value;
+        input.dataset.email = p.email;
+        input.checked = (current.get(p.email) || '') === value;
+        option.append(input, el('span', null, label));
+        levels.append(option);
+      }
+      row.append(who, levels);
+      return row;
+    }));
+    $shareError.hidden = true;
+    $shareDialog.showModal();
+    $sharePeople.querySelector('input:checked')?.focus();
+  }
+  $shareCancel.addEventListener('click', () => { if (!sharing) $shareDialog.close(); });
+  $shareDialog.addEventListener('cancel', (event) => { if (sharing) event.preventDefault(); });
+  $shareDialog.addEventListener('close', () => {
+    const card = [...$list.children].find((node) => node.dataset.sessionId === shareTarget?.id);
+    shareTarget = null;
+    (card?.querySelector('.session-share') || $refresh).focus();
+  });
+  $shareSave.addEventListener('click', async () => {
+    if (!shareTarget || sharing) return;
+    const share = {};
+    for (const input of $sharePeople.querySelectorAll('input:checked')) if (input.value) share[input.dataset.email] = input.value;
+    sharing = true;
+    $shareSave.disabled = $shareCancel.disabled = true;
+    $shareSave.textContent = 'Saving…';
+    $shareError.hidden = true;
+    try {
+      const res = await fetch(`api/sessions/${encodeURIComponent(shareTarget.id)}/share`, {
+        method: 'PUT', credentials: 'same-origin', cache: 'no-store',
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify({ instance: shareTarget.instance, share }),
+      });
+      if (res.status === 404) throw new Error('This session has ended. Refresh the list.');
+      if (!res.ok) throw new Error('Could not change who it is shared with. Try again, or refresh and sign in again if this continues.');
+      $shareDialog.close();
+      await load();
+    } catch (error) {
+      $shareError.textContent = error.message;
+      $shareError.hidden = false;
+    } finally {
+      sharing = false;
+      $shareSave.disabled = $shareCancel.disabled = false;
+      $shareSave.textContent = 'Save';
+    }
   });
   $closeCancel.addEventListener('click', () => { if (!closing) $closeDialog.close(); });
   $closeDialog.addEventListener('cancel', (event) => { if (closing) event.preventDefault(); });

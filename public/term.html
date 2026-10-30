@@ -45,6 +45,7 @@
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   #notice { flex: none; padding: 8px 12px; color: var(--muted); background: var(--bar); border-bottom: 1px solid var(--line); font-size: 13px; }
   #notice.error { color: var(--danger); }
+  .notice-action { margin-left: 6px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--key); color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
   #clipboard-status { position: absolute; top: var(--clipboard-top, 54px); right: 8px; z-index: 15; max-width: min(380px, calc(100% - 16px)); padding: 8px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--bar); box-shadow: 0 4px 20px #0006; font-size: 13px; line-height: 1.4; pointer-events: none; }
   #clipboard-status.error { color: var(--danger); }
   #term-wrap { position: relative; flex: 1; min-height: 0; }
@@ -467,6 +468,6 @@
     <button id="upload-paste" class="primary" type="button" hidden>Paste</button>
   </div>
 </dialog>
-<script src="term.js?v=20261023-upload"></script>
+<script src="term.js?v=20261030-accounts"></script>
 </body>
 </html>

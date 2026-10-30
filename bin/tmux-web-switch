@@ -1,0 +1,9 @@
+#!/bin/sh
+# Run as the account itself by tmux-web-switch.service whenever /etc/tmux-web/accounts/<account> changes, and when the account's
+# systemd starts: "on" (re)starts the account's API and ttyd (so rewriting "on" after a deploy loads the new code), anything
+# else, or no file, stops them. The account's tmux sessions are not part of either service and keep running.
+state=$(cat "${TMUX_WEB_ACCOUNTS_DIR:-/etc/tmux-web/accounts}/$(id -un)" 2>/dev/null)
+if [ "$state" = on ]; then
+  exec systemctl --user --no-block restart tmux-web-api.service tmux-web-ttyd.service
+fi
+exec systemctl --user --no-block stop tmux-web-api.service tmux-web-ttyd.service

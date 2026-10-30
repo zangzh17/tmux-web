@@ -194,10 +194,77 @@ A signed-in email that is not listed is a plain user: it sees its own sessions (
 To add a person: add the email to the Access policy **and** `ALLOWED_EMAILS` (restart the API), then, if they should see
 others, to `users.json`.
 
+**Sharing.** Whoever may control a session (its owner, an admin, someone with `manageOthers`) can share it with other people of
+the same account: the people icon on its card, then **Off / View / Control** for each person. They then see it in their list
+("Shared with you" when it is a local one): View opens it read-only as above, Control as if it were theirs. The card shows
+"Shared with …". It is kept in the tmux session option `@tmux_web_share` (`PUT /api/sessions/:id/share {instance, share:
+{email: "view"|"full"}}`; `{}` stops sharing). Admins are never offered (they see everything anyway), nor the session's owner.
+
+**Somebody else's session opens read-only.** A session that is not your own (someone else's, a local one you only see because it
+was shared, any session of another account) attaches read-only even when you may control it, so a look does not resize their
+window or type into it. **Take control** in the bar under the title reloads it read-write (`?control=1`); **View only** goes back.
+
 **What this is not.** It separates people in the web UI and API; it is not a security boundary between Unix accounts. Anyone who
 can open a terminal here can run any command as this user, so they could read other sessions through tmux itself, read files
 or kill the tmux server. Give an account only to someone you would give that shell to. `unowned: "all"` means every user
 can use your own terminal-started sessions (including Claude ones); use `"viewers"` or `"none"` to keep them to yourself.
+For people who should not share a Unix user, see the next section.
+
+## Several Unix accounts (optional)
+
+One site can also serve several Unix accounts, so that someone works as their own Unix user. Every account runs its own copy
+of the API and ttyd as that user (its sessions, `~/.claude` transcripts and uploads are its own), with its sockets in
+`/run/tmux-web/<account>/`. One Caddy, run by the **home** account, sends `/a/<account>/api/*` and `/a/<account>/term/*` there;
+everything without `/a/` is the home account's. The page is the same everywhere (its links are relative, so under
+`/a/<account>/` it talks to that account); everybody's display preferences (`/api/prefs`) and the account switches
+(`/api/accounts`) are kept by the home account.
+
+    browser ─► Access ─► cloudflared ─► Caddy 127.0.0.1:8890 (run by the home account)
+                                         ├─ /api/*, /term/*            ─► /run/tmux-web/<home>/   API + ttyd as the home account
+                                         ├─ /a/<acct>/api/*, /term/*   ─► /run/tmux-web/<acct>/   API + ttyd as <acct>
+                                         └─ the page, also /a/<acct>/  ─► /opt/tmux-web/public
+
+`/etc/tmux-web/users.json` (see `deploy/users.example.json`):
+
+    { "home": "zihan", "accounts": ["xyp"], "unowned": "viewers",
+      "users": { "zihan@example.com": { "name": "Zihan", "admin": true },        // every account, every session
+                 "wfh@example.com":   { "name": "wfh" },                          // the home account: own sessions (and shared ones)
+                 "xyp@example.com":   { "name": "xyp", "account": "xyp" } } }     // the xyp account only, all of it
+
+* `home` is the account that runs Caddy; a person without `account` works in it. `accounts` lists the others. `admin` may enter
+  every account and do anything with every session there.
+* Each backend lets in only its own account's people and admins, and checks that itself (a request that reaches the wrong
+  backend finds nothing): anyone else gets 403 from its API and its terminals. Its `/api/me` then says `allowed: false` and the
+  person's `myAccount`, and the page moves them to `/a/<myAccount>/`.
+* In an account other than home, its people may do anything with every session in it, local ones too (they all run as them),
+  and there is no owner filter. In the home account everything in the previous section applies (owners, `unowned`, sharing).
+* An admin gets an **Account** row: a chip per account (green: running, amber: starting or stopping, grey: off) and **Turn on /
+  Turn off** for the others. Off stops that account's API and ttyd (about 100 MB), never its tmux sessions. The switch is
+  the file `/etc/tmux-web/accounts/<account>` (`on`/`off`, also fine to edit by hand); the account's own `tmux-web-switch.path`
+  (a systemd user unit, running as that account) starts or stops the two to match within a second or two. While an account is
+  off its page says so, with **Turn it on** for an admin; its own people are told to ask an admin, and the page opens their
+  account by itself once it is on.
+* A backend started with `TMUX_WEB_MULTI_ACCOUNT=1` (the units do) refuses every request while the users file is missing or
+  names no `home`, instead of treating everybody as its operator.
+
+**What this is and is not.** Each account's sessions run as its own Unix user, so file permissions between accounts hold. But the
+home account controls the others: it runs the front door, owns `/opt/tmux-web` (the code every account runs) and `/etc/tmux-web`,
+and can reach every account's sockets, so anyone who can run commands as the home account (in a terminal here too) can act as
+any account. Also check the other accounts' Unix groups: `sudo`, `lxd` or `docker` make an account root-equivalent, whatever the
+web allows.
+
+**Install** (systemd, Node 20+ at `/usr/bin/node`, ttyd and caddy in the home account's `~/.local/bin` or in `/usr/local/bin`):
+
+1. `sudo deploy/setup-root.sh <home> <account>...`, once and again after adding an account. It makes `/opt/tmux-web` and
+   `/etc/tmux-web` owned by the home account (no sudo needed afterwards), copies ttyd and caddy to `/usr/local/bin`, makes the socket
+   directories at every boot (tmpfiles.d; another account's is `2750 <account>:<home's group>`, so only the front door gets in),
+   installs the units in `/etc/systemd/user`, and for every other account turns on linger, writes its switch (`off` unless it
+   exists) and enables `tmux-web-switch.path`.
+2. As the home account, `deploy/install.sh`: copies the checkout to `/opt/tmux-web`, the first time also `~/.config/tmux-web/env`
+   and `users.json` to `/etc/tmux-web/` and the old per-user units to `~/.config/tmux-web/old-units`, then (re)starts the home
+   account's API, ttyd and Caddy; accounts that are on restart with the new code. Run it again after every change.
+3. Edit `/etc/tmux-web/users.json` (re-read on change). Add every person to the Access policy and to `ALLOWED_EMAILS` in
+   `/etc/tmux-web/env`; after changing env, run `deploy/install.sh` again (accounts that are off read it when turned on).
 
 ## Services (systemd --user)
 
@@ -268,7 +335,9 @@ Origin/content-type restrictions, name validation and conflicts, rename without 
 confirmation, and survival of other sessions. `history.test.mjs` and `transcript.test.mjs` cover the read-only views
 (hand-written jsonl: backward pagination, every classification, truncation, ANSI, a half-written last line, non-Claude panes
 → 404, two Claude panes in one directory each getting their own conversation; `TMUX_WEB_CLAUDE_COMMAND='^sleep$'` lets a `sleep` pane stand in for Claude). `input.test.mjs` drives a fake Claude terminal (bracketed paste on) to check exactly which bytes arrive. `users.test.mjs` covers ownership, the per-user list, the permission matrix on every route, `/verify` for terminals,
-config reloads, and multi-user being off without a users file. `helpers.mjs` is the shared scaffolding.
+config reloads, and multi-user being off without a users file. `accounts.test.mjs` runs a home and a personal account side by
+side: who may enter which, admins, sharing, `/api/accounts` and the switches, and refusing everything without a valid users file.
+`helpers.mjs` is the shared scaffolding.
 
 ## Vendored libraries
 

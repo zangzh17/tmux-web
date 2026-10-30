@@ -1,7 +1,9 @@
 # Front door for tmux-web. Binds loopback only; cloudflared points here.
 # Every request must carry a valid Cloudflare Access JWT (checked by server.mjs).
-# ttyd and the API sit on Unix sockets in a 0700 dir, so other local users
-# cannot reach them directly.
+# ttyd and the API sit on Unix sockets that other local users cannot reach.
+#   TMUX_WEB_RUNTIME   the home account's socket directory (api.sock, ttyd.sock)
+#   TMUX_WEB_ACCOUNTS  where every account's socket directory is, <dir>/<account>/ (default /run/tmux-web; only used by /a/)
+#   TMUX_WEB_PUBLIC    the page (public/)
 {
 	auto_https off
 	admin off
@@ -17,20 +19,49 @@
 		-Server
 	}
 
-	route {
-		forward_auth unix/{$TMUX_WEB_RUNTIME}/api.sock {
-			uri /verify
-		}
+	# /a/<account>/...: the same page for another Unix account. Its api/ and term/ go to that account's own backend, which
+	# checks the Access token and who may enter that account by itself; an account whose backend is not running answers 502.
+	# The page's files are the same for everyone and are served even then, so it can say that the account is off.
+	@account path_regexp account ^/a/([a-z_][a-z0-9_-]{0,31})(/.*)$
+	@bare path_regexp ^/a/[a-z_][a-z0-9_-]{0,31}$
+	redir @bare {path}/ 308
+	handle @account {
+		rewrite * {re.account.2}?{query}
 		handle /api/* {
-			reverse_proxy unix/{$TMUX_WEB_RUNTIME}/api.sock
+			reverse_proxy unix/{$TMUX_WEB_ACCOUNTS:/run/tmux-web}/{re.account.1}/api.sock
 		}
 		handle /term/* {
-			reverse_proxy unix/{$TMUX_WEB_RUNTIME}/ttyd.sock
+			forward_auth unix/{$TMUX_WEB_ACCOUNTS:/run/tmux-web}/{re.account.1}/api.sock {
+				uri /verify
+			}
+			reverse_proxy unix/{$TMUX_WEB_ACCOUNTS:/run/tmux-web}/{re.account.1}/ttyd.sock
 		}
 		handle {
+			forward_auth unix/{$TMUX_WEB_RUNTIME}/api.sock {
+				uri /verify
+			}
 			header Cache-Control no-cache
 			root * {$TMUX_WEB_PUBLIC}
 			file_server
+		}
+	}
+
+	handle {
+		route {
+			forward_auth unix/{$TMUX_WEB_RUNTIME}/api.sock {
+				uri /verify
+			}
+			handle /api/* {
+				reverse_proxy unix/{$TMUX_WEB_RUNTIME}/api.sock
+			}
+			handle /term/* {
+				reverse_proxy unix/{$TMUX_WEB_RUNTIME}/ttyd.sock
+			}
+			handle {
+				header Cache-Control no-cache
+				root * {$TMUX_WEB_PUBLIC}
+				file_server
+			}
 		}
 	}
 }

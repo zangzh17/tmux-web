@@ -1,0 +1,21 @@
+# tmux-web with several Unix accounts: the front door, run by the home account only (installed in /etc/systemd/user).
+[Unit]
+Description=tmux-web: Caddy front door on 127.0.0.1:8890 for every account
+After=tmux-web-api.service tmux-web-ttyd.service
+Wants=tmux-web-api.service tmux-web-ttyd.service
+
+[Service]
+Type=notify
+Environment=TMUX_WEB_PORT=8890
+Environment=TMUX_WEB_RUNTIME=/run/tmux-web/%u
+Environment=TMUX_WEB_ACCOUNTS=/run/tmux-web
+Environment=TMUX_WEB_PUBLIC=/opt/tmux-web/public
+# Separate XDG dirs: Caddy autosaves config even with `admin off`; don't clobber another Caddy's state.
+Environment=XDG_CONFIG_HOME=%h/.config/tmux-web/xdg-config
+Environment=XDG_DATA_HOME=%h/.config/tmux-web/xdg-data
+ExecStart=/usr/local/bin/caddy run --config /opt/tmux-web/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -8,7 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <title>Tmux sessions</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="app.css?v=20261007-list-1">
+<link rel="stylesheet" href="app.css?v=20261030-accounts">
 </head>
 <body>
 <main>
@@ -20,6 +20,14 @@
     </div>
     <button class="icon-btn" id="refresh" type="button" aria-label="Refresh sessions" title="Refresh sessions">⟳</button>
   </header>
+  <section class="preview-controls account-bar" id="account-bar" aria-label="Accounts" hidden>
+    <span class="preview-label" id="account-label">Account</span>
+    <div class="account-options" id="account-options" role="group" aria-labelledby="account-label"></div>
+  </section>
+  <section class="account-off" id="account-off" role="status" hidden>
+    <p id="account-off-text"></p>
+    <button id="account-on" type="button" hidden>Turn it on</button>
+  </section>
   <form class="create" id="create">
     <label for="session-name">New tmux session</label>
     <div class="create-row">
@@ -29,7 +37,7 @@
     <p class="hint muted" id="name-hint">Start with an English letter or number. Use letters, numbers, - or _, up to 48 characters.</p>
     <p class="create-error" id="create-error" role="alert" hidden></p>
   </form>
-  <section class="preview-controls" aria-label="Session preview settings">
+  <section class="preview-controls" id="preview-section" aria-label="Session preview settings">
     <span class="preview-label" id="preview-label">Preview lines</span>
     <div class="preview-options" id="preview-options" role="group" aria-labelledby="preview-label">
       <button type="button" data-lines="0" aria-pressed="false">No preview</button>
@@ -64,6 +72,16 @@
     </div>
   </form>
 </dialog>
+<dialog id="share-dialog" aria-labelledby="share-heading" aria-describedby="share-hint">
+  <h2 id="share-heading">Share “<span id="share-name"></span>”</h2>
+  <p id="share-hint">It shows up in their session list. View: they can watch it and read it. Control: they can also type into it, rename and close it.</p>
+  <div id="share-people"></div>
+  <p id="share-error" role="alert" hidden></p>
+  <div class="dialog-actions">
+    <button id="share-cancel" type="button">Cancel</button>
+    <button id="share-save" class="primary" type="button">Save</button>
+  </div>
+</dialog>
 <dialog id="close-dialog" aria-labelledby="close-heading" aria-describedby="close-description">
   <h2 id="close-heading">Close this session?</h2>
   <p id="close-description">This will end “<span id="close-name"></span>”<span id="close-owner"></span> and all its windows and running programs.</p>
@@ -73,6 +91,6 @@
     <button id="close-confirm" class="confirm" type="button">Close session</button>
   </div>
 </dialog>
-<script src="index.js?v=20261007-list-1"></script>
+<script src="index.js?v=20261030-accounts"></script>
 </body>
 </html>

@@ -4,6 +4,7 @@
 // forward_auth for every request and proxies /api/* here; /api/* re-checks the
 // JWT itself so the socket is safe even if the proxy config is wrong.
 import http from 'node:http';
+import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,6 +17,22 @@ const SOCK = process.env.TMUX_WEB_API_SOCK
   || path.join(process.env.XDG_RUNTIME_DIR || os.tmpdir(), 'tmux-web', 'api.sock');
 const TMUX = process.env.TMUX_BIN || '/usr/bin/tmux';
 const PREVIEW = process.env.TMUX_WEB_PREVIEW !== '0';
+const SOCK_MODE = /^[0-7]{3}$/.test(process.env.TMUX_WEB_SOCK_MODE || '') ? parseInt(process.env.TMUX_WEB_SOCK_MODE, 8) : 0o600;
+
+// ---- accounts: one backend per Unix account
+// One site can serve several Unix accounts. Each runs its own copy of this API and ttyd as that account, with its sockets in
+// /run/tmux-web/<account>/ (TMUX_WEB_RUN), and Caddy sends /a/<account>/api/* and /a/<account>/term/* there; everything else
+// belongs to the home account. users.json says which account each person belongs to ("account", default: "home") and who may
+// enter every account ("admin"). A backend lets in only its own account's people and admins, and checks that itself, so a
+// request that reaches the wrong backend still finds nothing. Without "home" there is one account, the one this runs as.
+const ACCOUNT = process.env.TMUX_WEB_ACCOUNT || os.userInfo().username;
+const ACCOUNT_NAME = /^[a-z_][a-z0-9_-]{0,31}$(?![\s\S])/;
+const RUN_DIR = process.env.TMUX_WEB_RUN || '/run/tmux-web';
+// <dir>/<account> holds "on" or "off": that account's own systemd (tmux-web-switch.path) starts or stops its backend to match
+const ACCOUNTS_DIR = process.env.TMUX_WEB_ACCOUNTS_DIR || '/etc/tmux-web/accounts';
+// The multi-account units set this: without a users file that names the home account nobody gets in, rather than everybody
+// becoming this account's operator.
+const MULTI_ACCOUNT = process.env.TMUX_WEB_MULTI_ACCOUNT === '1';
 
 const normalizeTeam = (v) => {
   v = (v || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
@@ -93,6 +110,10 @@ async function authorize(req) {
     logOnce('[tmux-web] CF_ACCESS_TEAM_DOMAIN / CF_ACCESS_AUD not set: refusing all requests');
     return { ok: false, status: 503, reason: 'access not configured' };
   }
+  if (MULTI_ACCOUNT && !config().home) {
+    logOnce(`[tmux-web] ${USERS_FILE} is missing or names no "home" account: refusing all requests`);
+    return { ok: false, status: 503, reason: 'users file not configured' };
+  }
   let token = req.headers['cf-access-jwt-assertion'];
   if (!token) token = /(?:^|;\s*)CF_Authorization=([^;]+)/.exec(req.headers.cookie || '')?.[1];
   if (!token) return { ok: false, status: 401, reason: 'no access token' };
@@ -110,17 +131,22 @@ async function authorize(req) {
 }
 
 // ---- people: who may see whose sessions
-// Every session runs as the one Unix user; the web layer only decides which of them a signed-in person is shown and may
-// touch. A session started from the web is stamped with its owner (the tmux session option @tmux_web_owner, lowercased
+// Every session of an account runs as that one Unix user; the web layer only decides which of them a signed-in person is shown
+// and may touch. A session started from the web is stamped with its owner (the tmux session option @tmux_web_owner, lowercased
 // email); sessions started any other way carry no stamp and are "local".
 // users.json (TMUX_WEB_USERS, default ~/.config/tmux-web/users.json), re-read when it changes:
 //   { "unowned": "all" | "viewers" | "none",   who sees local sessions: everyone (default), only people who may view others, nobody
-//     "users": { "a@x.com": { "name": "Alice", "viewOthers": "all" | ["b@x.com"], "manageOthers": "all" | ["b@x.com"] } } }
+//     "home": "zihan", "accounts": ["xyp"],   several Unix accounts (see "accounts" above); both optional
+//     "users": { "a@x.com": { "name": "Alice", "viewOthers": "all" | ["b@x.com"], "manageOthers": "all" | ["b@x.com"],
+//                             "account": "xyp", "admin": true } } }
 // viewOthers: may look at those people's sessions, read-only. manageOthers: may also type into, rename and close them, as if
 // they were their own (and implies viewing). A person allowed in by Access but not listed is a plain user: shown their own
-// and local sessions only.
+// and local sessions only. account: the Unix account this person works in (default: home). admin: may enter every account
+// and do anything with every session in it. In an account other than home (somebody's own Unix account) its people may do
+// anything with every session in it, local ones included: they all run as them anyway. Any session can also be shared with
+// people of its account (@tmux_web_share), see shareSession.
 const USERS_FILE = process.env.TMUX_WEB_USERS || path.join(os.homedir(), '.config', 'tmux-web', 'users.json');
-const NO_USERS = { unowned: 'all', users: new Map() };
+const NO_USERS = { unowned: 'all', home: '', accounts: [], users: new Map() };
 let usersConfig = NO_USERS;
 // Multi-user is OPTIONAL. It is on exactly when a users file exists (and TMUX_WEB_MULTI_USER is not "0"); without one every
 // person Access lets in is simply the operator: all sessions are shown to them and they may touch all of them, nothing is
@@ -134,18 +160,30 @@ function scopeOf(value) {
   const list = Array.isArray(value) ? new Set(value.filter((e) => typeof e === 'string').map((e) => e.trim().toLowerCase()).filter(Boolean)) : null;
   return list?.size ? list : null;
 }
+const accountName = (v) => typeof v === 'string' && ACCOUNT_NAME.test(v);
 function parseUsers(raw) {
   if (!isObject(raw) || (raw.users !== undefined && !isObject(raw.users))) throw new Error('expected {"users": {...}}');
+  const home = raw.home ?? '';
+  if (home !== '' && !accountName(home)) throw new Error('"home" is not an account name');
+  if (raw.accounts !== undefined && !(Array.isArray(raw.accounts) && raw.accounts.every(accountName))) throw new Error('"accounts" is not a list of account names');
+  const accounts = [...new Set(raw.accounts || [])].filter((a) => a !== home);
   const users = new Map();
   for (const [email, entry] of Object.entries(raw.users || {})) {
     if (!isObject(entry)) throw new Error(`user ${email} is not an object`);
+    if (entry.account !== undefined && !(accountName(entry.account) && (entry.account === home || accounts.includes(entry.account)))) {
+      throw new Error(`user ${email}: "account" must be "home" or one of "accounts"`);
+    }
     users.set(email.trim().toLowerCase(), {
       name: typeof entry.name === 'string' && entry.name.trim() && entry.name.length <= 48 ? entry.name.trim() : '',
       viewOthers: scopeOf(entry.viewOthers),
       manageOthers: scopeOf(entry.manageOthers),
+      account: entry.account === home ? '' : entry.account || '',
+      admin: entry.admin === true,
     });
   }
-  return { unowned: ['all', 'viewers', 'none'].includes(raw.unowned) ? raw.unowned : 'all', users };
+  // without a home account every backend would take a person without "account" for one of its own
+  if (!home && accounts.length) throw new Error('"accounts" needs "home"');
+  return { unowned: ['all', 'viewers', 'none'].includes(raw.unowned) ? raw.unowned : 'all', home, accounts, users };
 }
 function config() {
   let stamp = '';
@@ -159,29 +197,56 @@ function config() {
 }
 const localPart = (email) => email.split('@')[0] || email;
 const displayName = (email) => config().users.get(email)?.name || localPart(email);
+const homeAccount = () => config().home || ACCOUNT;
+const personal = () => ACCOUNT !== homeAccount(); // somebody's own Unix account, not the home one
 const userFor = (email) => {
   const entry = config().users.get(email);
-  return { email, name: displayName(email), viewOthers: entry?.viewOthers ?? null, manageOthers: entry?.manageOthers ?? null };
+  return { email, name: displayName(email), viewOthers: entry?.viewOthers ?? null, manageOthers: entry?.manageOthers ?? null,
+    account: entry?.account || homeAccount(), admin: !!entry?.admin };
 };
 const multiUser = () => !MULTI_USER_FORCED_OFF && config() !== NO_USERS;
-const mayViewOthers = (user) => !!(user.viewOthers || user.manageOthers);
+// may this person use this backend at all (their own account, or an admin)
+const mayEnter = (user) => !multiUser() || user.admin || user.account === ACCOUNT;
+const mayViewOthers = (user) => user.admin || !!(user.viewOthers || user.manageOthers);
 const covers = (scope, owner) => scope === 'all' || !!scope?.has(owner);
-// 'full' (own, local when allowed, or someone else's that I may manage) | 'view' (someone else's, read-only) | null (not for this person)
-function accessFor(user, owner) {
+// @tmux_web_share: "a@x.com=view,b@x.com=full" -> Map(email -> 'view' | 'full'); anything malformed is ignored
+const EMAIL = /^[a-z0-9._%+-]+@[a-z0-9.-]+$(?![\s\S])/;
+const SHARE_LEVELS = new Set(['view', 'full']);
+function shareOf(value) {
+  const share = new Map();
+  for (const part of String(value || '').split(',')) {
+    const [email = '', level] = part.trim().toLowerCase().split('=');
+    if (EMAIL.test(email) && SHARE_LEVELS.has(level)) share.set(email, level);
+  }
+  return share;
+}
+// 'full' (own, local when allowed, shared with me for control, someone else's that I may manage, anything in my own personal
+// account, anything at all for an admin) | 'view' (someone else's, read-only) | null (not for this person)
+function accessFor(user, owner, share = '') {
   if (!multiUser()) return 'full';
-  if (owner === user.email) return 'full';
+  if (!mayEnter(user)) return null;
+  if (user.admin || owner === user.email || personal()) return 'full';
+  let access = null;
   if (!owner) {
     const { unowned } = config();
-    return unowned === 'all' || (unowned === 'viewers' && mayViewOthers(user)) ? 'full' : null;
-  }
-  if (covers(user.manageOthers, owner)) return 'full';
-  return covers(user.viewOthers, owner) ? 'view' : null;
+    if (unowned === 'all' || (unowned === 'viewers' && mayViewOthers(user))) access = 'full';
+  } else if (covers(user.manageOthers, owner)) access = 'full';
+  else if (covers(user.viewOthers, owner)) access = 'view';
+  const shared = shareOf(share).get(user.email);
+  return access === 'full' || shared === 'full' ? 'full' : access || shared || null;
 }
+// Not this person's own session (someone else's, or a local one that is not theirs: in another account, or one they only see
+// because it was shared with them): the page opens it read-only until they choose to take control, so a look does not resize
+// the owner's window or type into it.
+const foreign = (user, owner) => multiUser() && (owner ? owner !== user.email : !(user.account === ACCOUNT && accessFor(user, '') === 'full'));
 const ownerOf = (owner) => (owner ? { email: owner, name: displayName(owner) } : null);
+// who a session may be shared with: people of this account who are not admins (they see everything anyway)
+const sharePeople = () => (multiUser() && !personal() ? [...config().users]
+  .filter(([email, u]) => !u.admin && !u.account && EMAIL.test(email)).map(([email]) => ({ email, name: displayName(email) })) : []);
 
 // ---- tmux
 const FIELDS = ['session_id', 'pid', 'session_name', 'session_windows', 'session_attached', 'session_activity',
-  'session_created', 'pane_current_command', 'pane_current_path', 'pane_id', '@tmux_web_owner'];
+  'session_created', 'pane_current_command', 'pane_current_path', 'pane_id', '@tmux_web_owner', '@tmux_web_share'];
 const FMT = FIELDS.map((f) => `#{${f}}`).join('\t');
 
 const tmux = (args, maxBuffer = 1 << 20) => new Promise((resolve, reject) => {
@@ -209,18 +274,19 @@ async function listRows() {
   }
   const home = os.homedir();
   return out.split('\n').filter(Boolean).map((l) => l.split('\t')).filter((f) => f.length === FIELDS.length)
-    .map(([id, serverPid, name, windows, attached, activity, created, command, cwd, paneId, owner]) => ({
+    .map(([id, serverPid, name, windows, attached, activity, created, command, cwd, paneId, owner, share]) => ({
       id, instance: `${serverPid}:${created}`, name, command,
       windows: +windows, attached: +attached, activity: +activity, created: +created,
       path: cwd === home || cwd.startsWith(`${home}/`) ? `~${cwd.slice(home.length)}` : cwd,
-      paneId, owner: owner.trim().toLowerCase(),
+      paneId, owner: owner.trim().toLowerCase(), share,
     }));
 }
 
 // ?owner= is a list (repeated and/or comma separated) of: me, local, all (everything the caller may see) or an email.
-// Default: my sessions plus the local ones. Anything the caller may not view is dropped, not reported.
+// Default: my sessions plus the local ones. Anything the caller may not view is dropped, not reported. Sessions shared with
+// the caller are always listed, and a personal account lists everything (it is all theirs).
 function ownerSpecs(user, query) {
-  if (!multiUser()) return ['all'];
+  if (!multiUser() || personal()) return ['all'];
   const asked = query.getAll('owner').flatMap((v) => v.split(',')).map((v) => v.trim().toLowerCase()).filter(Boolean);
   const applied = new Set();
   for (const spec of asked.length ? asked : ['me', 'local']) {
@@ -232,31 +298,86 @@ function ownerSpecs(user, query) {
   return [...applied];
 }
 
+const sharedWith = (share) => [...shareOf(share)].map(([email, level]) => ({ email, name: displayName(email), level }));
 async function listSessions(user, specs, withPreview) {
-  const wanted = (owner) => specs.includes('all') || (owner === user.email ? specs.includes('me') : owner ? specs.includes(owner) : specs.includes('local'));
-  const rows = (await listRows()).filter((r) => accessFor(user, r.owner) && wanted(r.owner));
+  const wanted = ({ owner, share }) => specs.includes('all') || shareOf(share).has(user.email)
+    || (owner === user.email ? specs.includes('me') : owner ? specs.includes(owner) : specs.includes('local'));
+  const rows = (await listRows()).filter((r) => accessFor(user, r.owner, r.share) && wanted(r));
   // previews are read only for what is returned: a session hidden by the filter never has its screen captured
-  const sessions = await Promise.all(rows.map(async ({ paneId, owner, ...row }) => ({
-    ...row, owner: multiUser() ? ownerOf(owner) : null, mine: multiUser() && owner === user.email, access: accessFor(user, owner),
-    preview: withPreview ? await peek(paneId) : [],
-  })));
+  const sessions = await Promise.all(rows.map(async ({ paneId, owner, share, ...row }) => {
+    const access = accessFor(user, owner, share);
+    return {
+      ...row, owner: multiUser() ? ownerOf(owner) : null, mine: multiUser() && owner === user.email, access, foreign: foreign(user, owner),
+      share: access === 'full' && multiUser() ? sharedWith(share) : [], // whom it is shared with: for those who may change that
+      sharedWithMe: shareOf(share).get(user.email) || null,
+      preview: withPreview ? await peek(paneId) : [],
+    };
+  }));
   return sessions.sort((a, b) => b.activity - a.activity);
 }
 
-// GET /api/me: { multiUser, email, name, canViewOthers, canManageOthers, people, local }: who I am and whose sessions I may look at
-// or manage (the filter UI is only offered when canViewOthers; none of it when multiUser is false).
+// GET /api/me: { multiUser, email, name, account, myAccount, admin, allowed, canViewOthers, canManageOthers, people, local,
+// sharePeople }: who I am, which account this is and which one is mine (allowed: may I use this one), whose sessions I may
+// look at or manage (the filter UI is only offered when there are people; none of it when multiUser is false), and whom I could
+// share a session with.
 async function whoAmI(user) {
-  if (!multiUser()) return { multiUser: false, email: user.email, name: user.name, canViewOthers: false, canManageOthers: false, people: [], local: 0 };
+  const base = { email: user.email, name: user.name, account: ACCOUNT, myAccount: user.account, admin: user.admin, allowed: mayEnter(user) };
+  const none = { canViewOthers: false, canManageOthers: false, people: [], local: 0, sharePeople: [] };
+  if (!multiUser()) return { multiUser: false, ...base, ...none };
+  if (!mayEnter(user)) return { multiUser: true, ...base, ...none };
   const rows = await listRows();
   const owned = new Map();
   for (const r of rows) if (r.owner) owned.set(r.owner, (owned.get(r.owner) || 0) + 1);
-  const scopes = [user.viewOthers, user.manageOthers];
-  const emails = scopes.includes('all') ? [...new Set([...config().users.keys(), ...owned.keys()])]
+  const scopes = user.admin ? ['all'] : [user.viewOthers, user.manageOthers];
+  const members = [...config().users].filter(([, u]) => (u.account || homeAccount()) === ACCOUNT).map(([email]) => email);
+  const emails = scopes.includes('all') ? [...new Set([...members, ...owned.keys()])]
     : [...new Set(scopes.flatMap((scope) => (scope ? [...scope] : [])))];
-  const people = emails.filter((e) => e !== user.email).map((email) => ({ email, name: displayName(email), sessions: owned.get(email) || 0 }))
+  // a personal account is all one person's: nothing to sort by owner there
+  const people = personal() ? [] : emails.filter((e) => e !== user.email).map((email) => ({ email, name: displayName(email), sessions: owned.get(email) || 0 }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.email.localeCompare(b.email));
-  return { multiUser: true, email: user.email, name: user.name, canViewOthers: mayViewOthers(user), canManageOthers: !!user.manageOthers, people,
-    local: accessFor(user, '') ? rows.filter((r) => !r.owner).length : 0 };
+  return { multiUser: true, ...base, canViewOthers: mayViewOthers(user), canManageOthers: user.admin || !!user.manageOthers, people,
+    local: accessFor(user, '') ? rows.filter((r) => !r.owner).length : 0, sharePeople: sharePeople().filter((p) => p.email !== user.email) };
+}
+
+// GET /api/accounts -> { home, admin, accounts: [{ name, home, on, up }] }: the accounts this person may switch to, home first (an admin:
+// all of them; anyone else: their own). on = its switch file says "on" (home is always on); up = its API answers right now. The
+// page asks the home backend (/api/accounts, not relative), which can reach every account's socket.
+const switchOf = (name) => { try { return fs.readFileSync(path.join(ACCOUNTS_DIR, name), 'utf8').trim(); } catch { return ''; } };
+const reachable = (name) => new Promise((resolve) => {
+  const sock = net.connect(path.join(RUN_DIR, name, 'api.sock'));
+  const done = (ok) => { sock.destroy(); resolve(ok); };
+  sock.setTimeout(500, () => done(false));
+  sock.once('connect', () => done(true));
+  sock.once('error', () => done(false));
+});
+async function accountStates(user) {
+  const home = homeAccount();
+  const names = user.admin ? [home, ...config().accounts] : [user.account];
+  const accounts = await Promise.all(names.map(async (name) => ({ name, home: name === home, on: name === home || switchOf(name) === 'on',
+    up: name === ACCOUNT || name === home || await reachable(name) })));
+  return { home, admin: user.admin, accounts };
+}
+// PUT /api/accounts/:name { on } (admins only) -> { name, on }: flips that account's switch file. Its own systemd
+// (tmux-web-switch.path, running as that account) starts or stops its API and ttyd to match within a second or two; its tmux
+// sessions keep running either way.
+async function switchAccount(req, user, name) {
+  const input = await readMutation(req);
+  if (input.status) return input;
+  if (!user.admin) return { status: 403, body: { error: 'only an admin can switch an account on or off' } };
+  if (!config().accounts.includes(name)) return { status: 404, body: { error: 'no such account' } };
+  const { on } = input.data;
+  if (typeof on !== 'boolean') return { status: 400, body: { error: 'expected {"on": true or false}' } };
+  const file = path.join(ACCOUNTS_DIR, name);
+  const temp = path.join(ACCOUNTS_DIR, `.${name}.${process.pid}.tmp`);
+  try {
+    fs.writeFileSync(temp, on ? 'on\n' : 'off\n', { mode: 0o644 });
+    fs.renameSync(temp, file);
+  } catch (e) {
+    fs.rmSync(temp, { force: true });
+    console.error(`[tmux-web] cannot switch ${name}: ${e.message}`);
+    return { status: 500, body: { error: `cannot write ${file}` } };
+  }
+  return { status: 200, body: { name, on } };
 }
 
 // ---- per-person display preferences (font sizes, Read view size/width, which view a session opens in)
@@ -385,6 +506,35 @@ async function changeSession(req, id) {
   }
 }
 
+// PUT /api/sessions/:id/share { instance, share: { "<email>": "view" | "full" } } -> { id, share: [{ email, name, level }] }
+// Replaces whom the session is shared with ({} stops sharing). Only people from sharePeople can be named, never the owner.
+// A person it is shared with sees it in their list (view: read-only; full: as if it were theirs). Needs 'full' access.
+async function shareSession(req, id, owner) {
+  const input = await readMutation(req, 4096);
+  if (input.status) return input;
+  const { instance, share } = input.data;
+  if (typeof instance !== 'string' || !SESSION_INSTANCE.test(instance)) return { status: 400, body: { error: 'invalid session identity' } };
+  if (!isObject(share)) return { status: 400, body: { error: 'expected {"share": {"<email>": "view" | "full"}}' } };
+  const people = new Set(sharePeople().map((p) => p.email));
+  const entries = [];
+  for (const [raw, level] of Object.entries(share)) {
+    const email = raw.trim().toLowerCase();
+    if (!people.has(email) || email === owner || !SHARE_LEVELS.has(level)) return { status: 400, body: { error: `cannot share with ${raw}` } };
+    entries.push(`${email}=${level}`);
+  }
+  const value = entries.sort().join(',');
+  try {
+    // identity check and change in one tmux command, as for rename/close (the emails passed EMAIL: no quotes or spaces)
+    const command = value ? `set-option -t '${id}' @tmux_web_share '${value}'` : `set-option -u -t '${id}' @tmux_web_share`;
+    const result = await tmux(['if-shell', '-F', '-t', id, `#{==:#{pid}:#{session_created},${instance}}`, command, "display-message -p 'tmux-web: stale session'"]);
+    if (result.trim() === 'tmux-web: stale session') return gone;
+  } catch (e) {
+    if (missingSession(e)) return gone;
+    throw e;
+  }
+  return { status: 200, body: { id, share: sharedWith(value) } };
+}
+
 // ---- read-only views: plain scrollback, and the Claude Code conversation behind a pane
 const CLAUDE_COMMAND = new RegExp(process.env.TMUX_WEB_CLAUDE_COMMAND || 'claude', 'i');
 const CLAUDE_PROJECTS = process.env.TMUX_WEB_CLAUDE_PROJECTS || path.join(os.homedir(), '.claude', 'projects');
@@ -392,18 +542,18 @@ const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 const gone = { status: 404, body: { error: 'session not found' } };
 // What this person may do with session `id`: { access, owner }, or a 404 (a session they may not see does not exist for them).
 async function resolveAccess(user, id) {
-  let found, owner;
+  let found, owner, share;
   try {
     // tmux answers display-message for an id that does not exist with an empty line and success, so the id must come back
-    [found, owner = ''] = (await tmux(['display-message', '-p', '-t', id, '#{session_id}\t#{@tmux_web_owner}'])).replace(/\n$/, '').split('\t');
+    [found, owner = '', share = ''] = (await tmux(['display-message', '-p', '-t', id, '#{session_id}\t#{@tmux_web_owner}\t#{@tmux_web_share}'])).replace(/\n$/, '').split('\t');
   } catch (e) {
     if (missingTarget(e)) return gone;
     throw e;
   }
   if (found !== id) return gone;
   owner = owner.trim().toLowerCase();
-  const access = accessFor(user, owner);
-  return access ? { access, owner } : gone;
+  const access = accessFor(user, owner, share);
+  return access ? { access, owner, share } : gone;
 }
 // null when `need` is allowed; otherwise the refusal (404 unseen, 403 read-only)
 async function gate(user, id, need) {
@@ -425,7 +575,8 @@ async function verifyTerminal(user, uri) {
     url = new URL(uri, 'http://local');
     route = path.posix.normalize(decodeURIComponent(url.pathname));
   } catch { return { status: 403, reason: 'bad request' }; }
-  if (!/^\/term(?:\/|$)/i.test(route)) return { status: 200 };
+  if (!/^\/term(?:\/|$)/i.test(route)) return { status: 200 }; // the page itself: the same static files for everyone
+  if (!mayEnter(user)) return { status: 403, reason: 'not your account' };
   const match = TERM_ARGS.exec(url.search);
   if (!match) {
     const names = [...url.searchParams.keys()].map((k) => k.toLowerCase());
@@ -913,23 +1064,38 @@ const server = http.createServer(async (req, res) => {
       return result.status === 200 ? send(res, 200, 'ok') : send(res, result.status, result.reason);
     }
     if (pathname === '/api/me' && req.method === 'GET') return sendJson(res, { status: 200, body: await whoAmI(user) });
+    // a person's preferences and the account switches live with the home account; the page asks for them there
     if (pathname === '/api/prefs' && req.method === 'GET') return sendJson(res, { status: 200, body: { prefs: prefsOf(readPrefs(), user.email) } });
     if (pathname === '/api/prefs' && req.method === 'PUT') return sendJson(res, await savePrefs(req, user));
+    if (pathname === '/api/accounts' && req.method === 'GET') return sendJson(res, { status: 200, body: await accountStates(user) });
+    const account = /^\/api\/accounts\/([^/]+)$/.exec(pathname);
+    if (account) {
+      if (req.method !== 'PUT') return send(res, 405, 'method not allowed');
+      return sendJson(res, await switchAccount(req, user, account[1]));
+    }
+    // everything else is this account's sessions and files
+    if (!mayEnter(user)) return sendJson(res, { status: 403, body: { error: `this is the ${ACCOUNT} account`, account: user.account } });
     if (pathname === '/api/sessions' && req.method === 'GET') {
       const specs = ownerSpecs(user, searchParams);
       const sessions = await listSessions(user, specs, searchParams.get('preview') !== '0');
-      return sendJson(res, { status: 200, body: { now: Math.floor(Date.now() / 1000), owners: specs, sessions } });
+      return sendJson(res, { status: 200, body: { now: Math.floor(Date.now() / 1000), account: ACCOUNT, owners: specs, sessions } });
     }
     if (pathname === '/api/sessions' && req.method === 'POST') return sendJson(res, await createSession(req, user));
     // every /api/sessions/:id... route: id syntax, method, then what this person may do with that session, and only then the body
-    const sub = /^\/api\/sessions\/([^/]+)(?:\/(input|history|transcript))?$/.exec(pathname);
+    const sub = /^\/api\/sessions\/([^/]+)(?:\/(input|history|transcript|share))?$/.exec(pathname);
     if (sub) {
       const view = sub[2];
-      const methods = view === 'input' ? ['POST'] : view ? ['GET'] : ['PATCH', 'DELETE'];
+      const methods = view === 'input' ? ['POST'] : view === 'share' ? ['PUT'] : view ? ['GET'] : ['PATCH', 'DELETE'];
       if (!methods.includes(req.method)) return send(res, 405, 'method not allowed');
       let id;
       try { id = decodeURIComponent(sub[1]); } catch { return send(res, 400, 'invalid session id'); }
       if (!SESSION_ID.test(id)) return view ? sendJson(res, { status: 400, body: { error: 'invalid session id' } }) : sendJson(res, await changeSession(req, id));
+      if (view === 'share') {
+        const r = await resolveAccess(user, id);
+        if (r.status) return sendJson(res, r);
+        if (r.access !== 'full') return sendJson(res, { status: 403, body: { error: `read-only: this session belongs to ${displayName(r.owner)}` } });
+        return sendJson(res, await shareSession(req, id, r.owner));
+      }
       const refused = await gate(user, id, view === 'history' || view === 'transcript' ? 'view' : 'full');
       if (refused) return sendJson(res, refused);
       if (view === 'input') return sendJson(res, await sessionInput(req, id));
@@ -944,7 +1110,7 @@ const server = http.createServer(async (req, res) => {
       if (upload[2]) return sendJson(res, await finishUpload(req, user, upload[1]));
       return sendJson(res, req.method === 'PUT' ? await uploadPiece(req, user, upload[1], searchParams) : cancelUpload(req, user, upload[1]));
     }
-    if (pathname === '/api/sessions' || pathname === '/api/me' || pathname === '/api/prefs' || pathname === '/api/uploads' || pathname === '/verify') return send(res, 405, 'method not allowed');
+    if (['/api/sessions', '/api/me', '/api/prefs', '/api/accounts', '/api/uploads', '/verify'].includes(pathname)) return send(res, 405, 'method not allowed');
     return send(res, 404, 'not found');
   } catch (e) {
     console.error('[tmux-web] handler error:', e.message);
@@ -957,8 +1123,8 @@ setInterval(sweepUploads, 3600_000).unref();
 fs.mkdirSync(path.dirname(SOCK), { recursive: true, mode: 0o700 });
 fs.rmSync(SOCK, { force: true });
 server.listen(SOCK, () => {
-  fs.chmodSync(SOCK, 0o600);
-  console.error(`[tmux-web] api listening on ${SOCK}; access ${TEAM && AUD ? `enforced for ${ISSUER}` : 'NOT CONFIGURED (all requests refused)'}`);
+  fs.chmodSync(SOCK, SOCK_MODE); // 660 when the front door runs as another user and gets in through the directory's group
+  console.error(`[tmux-web] api for account ${ACCOUNT} listening on ${SOCK}; access ${TEAM && AUD ? `enforced for ${ISSUER}` : 'NOT CONFIGURED (all requests refused)'}`);
 });
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => { server.close(); fs.rmSync(SOCK, { force: true }); process.exit(0); });

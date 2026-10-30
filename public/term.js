@@ -40,8 +40,9 @@
   // (coarse) gives it away. The short side of the screen does not change when it is turned.
   const DEVICE = !coarse ? 'desktop' : Math.min(screen.width, screen.height) >= 600 ? 'tablet' : 'phone';
   // ---- display preferences: terminal font, Read view size and width, and the view a Claude session opens in. Read from this
-  // browser at once, and kept on the server per person and device kind (api/prefs), so they come back after Safari clears the
-  // site's data and follow the person to another device of the same kind. A value changed here before the server answers wins.
+  // browser at once, and kept on the server per person and device kind (/api/prefs: always the home account's API, also on another
+  // account's page under /a/<account>/), so they come back after Safari clears the site's data and follow the person to another
+  // device of the same kind. A value changed here before the server answers wins.
   const PREF_NAMES = ['fs', 'readScale', 'readWidth', 'view'];
   const prefs = (() => {
     const key = (n) => `${DEVICE}.${n}`;
@@ -54,14 +55,14 @@
       if (!Object.keys(queued).length) return;
       const body = JSON.stringify({ prefs: queued });
       queued = {};
-      fetch('api/prefs', { method: 'PUT', credentials: 'same-origin', cache: 'no-store', keepalive: true, headers: { 'content-type': 'application/json' }, body }).catch(() => {});
+      fetch('/api/prefs', { method: 'PUT', credentials: 'same-origin', cache: 'no-store', keepalive: true, headers: { 'content-type': 'application/json' }, body }).catch(() => {});
     };
     const push = (n, v) => { queued[key(n)] = v; clearTimeout(timer); timer = setTimeout(flush, 800); };
     addEventListener('pagehide', flush);
     const ready = (async () => {
       let saved = {};
       try {
-        const res = await fetch('api/prefs', { credentials: 'same-origin', cache: 'no-store' });
+        const res = await fetch('/api/prefs', { credentials: 'same-origin', cache: 'no-store' });
         if (res.ok) saved = (await res.json()).prefs || {};
         else return [];
       } catch { return []; }
@@ -124,9 +125,18 @@
   let renamePending = null;
   let closing = false;
   let noticeTimer = null;
-  const showNotice = (message, error = false, temporary = false) => {
+  // action: { label, run } adds a button after the message
+  const showNotice = (message, error = false, temporary = false, action = null) => {
     clearTimeout(noticeTimer);
     $notice.textContent = message;
+    if (action) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'notice-action';
+      button.textContent = action.label;
+      button.addEventListener('click', action.run);
+      $notice.append(' ', button);
+    }
     $notice.classList.toggle('error', error);
     $notice.hidden = false;
     if (temporary) noticeTimer = setTimeout(() => { $notice.hidden = true; }, 2400);
@@ -1963,7 +1973,7 @@
     try {
       const res = await fetch('api/sessions?owner=all&preview=0', { credentials: 'same-origin', cache: 'no-store' });
       if (!res.ok) throw new Error('Could not load the session. Refresh and sign in again.');
-      const { sessions } = await res.json();
+      const { sessions, account } = await res.json();
       const session = sessions.find((s) => requestedId
         ? s.id === requestedId && (requestedInstance ? s.instance === requestedInstance : s.name === name)
         : s.name === name);
@@ -1973,8 +1983,18 @@
       name = session.name;
       renderName();
       updateUrl();
-      readOnly = session.access === 'view';
+      // Somebody else's session (or another account's) opens read-only even when we may control it: looking must not resize
+      // their window or type into it. "Take control" reloads with ?control=1; "View only" goes back.
+      const control = params.get('control') === '1';
+      readOnly = session.access === 'view' || (session.foreign && !control);
       $title.disabled = $close.disabled = $read.disabled = $plain.disabled = false;
+      const whose = session.owner ? `${session.owner.name}'s session` : `a session of the ${account || 'other'} account`;
+      const reopen = (on) => () => {
+        const url = new URL(location.href);
+        if (on) url.searchParams.set('control', '1'); else url.searchParams.delete('control');
+        detach();
+        location.replace(url);
+      };
       if (readOnly) {
         // The server enforces this too (it refuses a non-owner's terminal without `ro`, and tmux attaches read-only);
         // this just removes the controls that could not work.
@@ -1982,10 +2002,10 @@
         $close.hidden = $kb.hidden = $keys.hidden = true;
         document.getElementById('app').classList.remove('pagers');
         $title.title = '';
-        showNotice(`Viewing ${session.owner?.name || 'another user'}'s session · read-only`);
-      } else if (session.owner && !session.mine) {
-        // allowed to manage it: a reminder, because what is typed here goes to them
-        showNotice(`${session.owner.name}'s session · you can control it, so what you type goes to them`);
+        showNotice(`Viewing ${whose} · read-only`, false, false, session.access === 'full' ? { label: 'Take control', run: reopen(true) } : null);
+      } else if (session.foreign) {
+        // in control of it: a reminder, because what is typed here goes to them
+        showNotice(`${whose[0].toUpperCase()}${whose.slice(1)} · you have control, so what you type goes to them`, false, false, { label: 'View only', run: reopen(false) });
       }
       frame.src = `term/?arg=${encodeURIComponent(sessionId)}${readOnly ? '&arg=ro' : ''}`;
       // If Claude is what runs in it, open the way the last session was left on this kind of device: in the Read view (the

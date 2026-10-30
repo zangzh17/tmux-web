@@ -1,0 +1,21 @@
+# tmux-web with several Unix accounts: this account's API (installed in /etc/systemd/user by deploy/setup-root.sh).
+[Unit]
+Description=tmux-web: API of account %u (Access check, sessions) on /run/tmux-web/%u/api.sock
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/tmux-web/env
+Environment=TMUX_WEB_USERS=/etc/tmux-web/users.json
+# refuse everything while users.json does not name the home account
+Environment=TMUX_WEB_MULTI_ACCOUNT=1
+Environment=TMUX_WEB_API_SOCK=/run/tmux-web/%u/api.sock
+# group-writable: the directory's group is the front door's (see deploy/setup-root.sh)
+Environment=TMUX_WEB_SOCK_MODE=660
+ExecStart=/usr/bin/node /opt/tmux-web/server.mjs
+# A tmux server first started by the API is the account's session host: stop or restart only the API itself.
+KillMode=process
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

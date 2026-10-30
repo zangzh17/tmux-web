@@ -1,0 +1,10 @@
+{
+  "home": "zihan",
+  "accounts": ["xyp"],
+  "unowned": "viewers",
+  "users": {
+    "zihan@example.com": { "name": "Zihan", "admin": true },
+    "wfh@example.com": { "name": "wfh" },
+    "xyp@example.com": { "name": "xyp", "account": "xyp" }
+  }
+}

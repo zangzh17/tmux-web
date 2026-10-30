@@ -145,14 +145,19 @@ test('previews are read only for the sessions that are returned, and preview=0 r
 test('/api/me: who I am and whose sessions I may look at', async () => {
   const admin = await as('admin@x.com', 'GET', '/api/me');
   assert.equal(admin.status, 200);
+  // one account (no "home"): it is everybody's, and everybody listed in users.json could be given a session
+  const here = { account: 'main', myAccount: 'main', admin: false, allowed: true };
+  const sharePeople = [{ email: 'admin@x.com', name: 'Admin' }, { email: 'alice@x.com', name: 'Alice' }, { email: 'bob@x.com', name: 'Bob' }];
+  const others = (email) => sharePeople.filter((p) => p.email !== email);
   assert.deepEqual(admin.body, {
-    multiUser: true, email: 'admin@x.com', name: 'Admin', canViewOthers: true, canManageOthers: false, local: 2,
+    multiUser: true, email: 'admin@x.com', name: 'Admin', ...here, canViewOthers: true, canManageOthers: false, local: 2,
     people: [{ email: 'alice@x.com', name: 'Alice', sessions: 2 }, { email: 'bob@x.com', name: 'Bob', sessions: 3 }, { email: 'carol@x.com', name: 'carol', sessions: 2 }],
+    sharePeople: others('admin@x.com'),
   });
   const alice = await as('alice@x.com', 'GET', '/api/me');
-  assert.deepEqual(alice.body, { multiUser: true, email: 'alice@x.com', name: 'Alice', canViewOthers: true, canManageOthers: false, local: 2, people: [{ email: 'bob@x.com', name: 'Bob', sessions: 3 }] });
+  assert.deepEqual(alice.body, { multiUser: true, email: 'alice@x.com', name: 'Alice', ...here, canViewOthers: true, canManageOthers: false, local: 2, people: [{ email: 'bob@x.com', name: 'Bob', sessions: 3 }], sharePeople: others('alice@x.com') });
   const bob = await as('bob@x.com', 'GET', '/api/me');
-  assert.deepEqual(bob.body, { multiUser: true, email: 'bob@x.com', name: 'Bob', canViewOthers: false, canManageOthers: false, local: 2, people: [] });
+  assert.deepEqual(bob.body, { multiUser: true, email: 'bob@x.com', name: 'Bob', ...here, canViewOthers: false, canManageOthers: false, local: 2, people: [], sharePeople: others('bob@x.com') });
   const carol = await as('carol@x.com', 'GET', '/api/me');
   assert.deepEqual([carol.body.name, carol.body.canViewOthers, carol.body.people], ['carol', false, []]);
   assert.equal((await as('bob@x.com', 'POST', '/api/me')).status, 405);
@@ -274,7 +279,8 @@ test('users.json changes apply without a restart; a broken file keeps the last g
     api.writeUsers({ ...CONFIG, users: { 'alice@x.com': { name: 'Alice', viewOthers: 'all' } } }); // a good one replaces it
     assert.deepEqual([(await as('admin@x.com', 'GET', '/api/me')).body.canViewOthers, names(await list('alice@x.com', '?owner=carol@x.com')).length > 0], [false, true]);
     fs.rmSync(api.usersFile); // no file: multi-user is off (see the next test): nobody is separated from anybody
-    assert.deepEqual((await as('alice@x.com', 'GET', '/api/me')).body, { multiUser: false, email: 'alice@x.com', name: 'alice', canViewOthers: false, canManageOthers: false, people: [], local: 0 });
+    assert.deepEqual((await as('alice@x.com', 'GET', '/api/me')).body, { multiUser: false, email: 'alice@x.com', name: 'alice', account: 'main', myAccount: 'main', admin: false, allowed: true,
+      canViewOthers: false, canManageOthers: false, people: [], local: 0, sharePeople: [] });
     assert.deepEqual(names(await list('bob@x.com')), ['a1', 'adm1', 'b1', 'b2', 'c1', 'fk', 'loc1', 'loc2', 'stamp1', 'stamp2'], 'everything is shown to everybody');
   } finally { api.writeUsers(CONFIG); }
 });

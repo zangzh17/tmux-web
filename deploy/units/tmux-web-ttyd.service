@@ -1,0 +1,20 @@
+# tmux-web with several Unix accounts: this account's terminals (installed in /etc/systemd/user by deploy/setup-root.sh).
+[Unit]
+Description=tmux-web: ttyd of account %u on /run/tmux-web/%u/ttyd.sock
+
+[Service]
+Type=simple
+Environment=LANG=en_US.UTF-8
+ExecStartPre=/usr/bin/rm -f /run/tmux-web/%u/ttyd.sock
+# group-writable socket: the directory's group is the front door's (see deploy/setup-root.sh)
+UMask=0007
+# -a: session id arrives as ?arg=<id> and is validated by the wrapper (existing sessions only)
+# -O: reject cross-origin WebSockets; -P: ping so dead clients (phone lost signal) are detached promptly
+ExecStart=/usr/local/bin/ttyd -W -a -O -P 20 -i /run/tmux-web/%u/ttyd.sock -b /term -T xterm-256color \
+  -t rendererType=dom -t disableLeaveAlert=true -t disableResizeOverlay=true -t cursorBlink=true \
+  /opt/tmux-web/bin/tmux-web-attach
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

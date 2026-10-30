@@ -1,0 +1,11 @@
+# tmux-web with several Unix accounts: start or stop this account's API and ttyd to match its switch file. Enabled too, so the
+# switch is also applied when the account's systemd starts (at boot, with linger).
+[Unit]
+Description=tmux-web: apply the switch of account %u
+
+[Service]
+Type=oneshot
+ExecStart=/opt/tmux-web/bin/tmux-web-switch
+
+[Install]
+WantedBy=default.target
