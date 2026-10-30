@@ -25,7 +25,9 @@ done
 group=$(id -gn "$home")
 homedir=$(getent passwd "$home" | cut -d: -f6)
 
-install -d -o "$home" -g "$group" -m 0755 /opt/tmux-web /etc/tmux-web /etc/tmux-web/accounts
+install -d -o "$home" -g "$group" -m 0755 /opt/tmux-web /opt/tmux-web/bin /etc/tmux-web /etc/tmux-web/accounts
+# what the other accounts' tmux-web-switch.service runs, needed before it is started below (deploy/install.sh updates it)
+install -o "$home" -g "$group" -m 0755 "$here/bin/tmux-web-switch" /opt/tmux-web/bin/
 for bin in ttyd caddy; do
   if [ -x "$homedir/.local/bin/$bin" ]; then install -o root -g root -m 0755 "$homedir/.local/bin/$bin" "/usr/local/bin/$bin"
   elif [ ! -x "/usr/local/bin/$bin" ]; then echo "missing: $bin (put it in /usr/local/bin)" >&2; exit 1; fi
