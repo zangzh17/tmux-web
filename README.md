@@ -74,7 +74,11 @@ iPhone keep their own sizes): in the browser, and on the server (`GET/PUT /api/p
 `~/.local/state/tmux-web/prefs.json`, mode 600, only whitelisted keys), so they survive Safari clearing site data and reach
 another device of the same kind. A Claude session opens in Read only if Read (or Text) was the last view used; after **Done**
 the next one opens in the terminal.
-**Upload** (header, and the same button left of the Read view's message box) sends files, photos or a whole folder to
+**Upload** (header, and the same button left of the Read view's message box) sends files, photos, a whole folder, or what is on
+the **clipboard** (an image such as a screenshot, or a file: the Clipboard button reads it, the browser may ask first; or paste
+into the box under it, or anywhere while the dialog is open). An image or file pasted straight into the terminal, the scratch
+terminal or the message box is uploaded the same way, and Paste / Add to message puts its path there; a nameless or `image.png`
+one is named `clipboard-<date>-<time>.<ext>`. It all goes to
 a new folder under `TMUX_WEB_UPLOADS` (default `~/.cache/tmux-web/uploads/<date>-<time>-<hex>/`, mode 700). The page packs the
 selection into one tar (a folder keeps its tree; browsers send no empty folders; iOS may not offer folder picking) and sends it in
 8 MB pieces (`POST /api/uploads {size}`, `PUT /api/uploads/:id?offset=N`, `POST /api/uploads/:id/done`, `DELETE` cancels), so each

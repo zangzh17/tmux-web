@@ -1109,7 +1109,8 @@
   const $uploadCopy = document.getElementById('upload-copy');
   const $uploadPaste = document.getElementById('upload-paste');
   const canPickFolder = 'webkitdirectory' in $uploadFolder;
-  if (!canPickFolder) { document.getElementById('upload-pick-folder').hidden = true; $uploadPick.querySelector('.upload-choices').classList.add('one'); }
+  if (!canPickFolder) document.getElementById('upload-pick-folder').hidden = true; // two choices left: files, clipboard
+  else $uploadPick.querySelector('.upload-choices').classList.add('three');
   let uploadTarget = 'term'; // where Paste puts the paths: 'term' or 'composer' (the Read view's message box)
   let uploading = null; // { id, xhr, cancelled } while sending
   let uploadText = '';
@@ -1278,6 +1279,55 @@
     job.xhr?.abort();
     if (job.id) uploadApi('DELETE', `/${job.id}`).catch(() => {});
   }
+  // ---- from the clipboard: an image (a screenshot) or a file. The Clipboard button reads it (the browser may ask first); a paste
+  // into the box under it, anywhere while the dialog is open, into a terminal or into the message box brings the same. A
+  // nameless or "image.png" one is named by the time it came, so the files of several pastes can be told apart.
+  const CLIP_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/heic': 'heic', 'image/svg+xml': 'svg', 'application/pdf': 'pdf' };
+  function clipName(file, i) {
+    if (file.name && !/^image\.\w+$/i.test(file.name)) return file;
+    const d = new Date();
+    const two = (n) => String(n).padStart(2, '0');
+    const when = `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
+    const ext = CLIP_EXT[file.type] || (file.type.split('/')[1] || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 8) || 'bin';
+    return new File([file], `clipboard-${when}${i ? `-${i + 1}` : ''}.${ext}`, { type: file.type, lastModified: d.getTime() });
+  }
+  function pastedFiles(data) {
+    if (!data) return [];
+    let files = [...(data.files || [])];
+    if (!files.length) files = [...(data.items || [])].filter((item) => item.kind === 'file').map((item) => item.getAsFile()).filter(Boolean);
+    return files.map(clipName);
+  }
+  const $pasteZone = document.getElementById('upload-pastezone');
+  const uploadHint = (message) => { $uploadError.textContent = message; $uploadError.hidden = false; $pasteZone.focus(); };
+  async function uploadClipboard() {
+    $uploadError.hidden = true;
+    const blobs = [];
+    try {
+      if (!navigator.clipboard?.read) throw new Error('no clipboard reading here');
+      for (const item of await navigator.clipboard.read()) {
+        const type = item.types.find((t) => !t.startsWith('text/') && !t.startsWith('web '));
+        if (type) blobs.push(await item.getType(type));
+      }
+    } catch { uploadHint('The browser did not hand over the clipboard. Paste into the box below instead.'); return; }
+    if (!blobs.length) { uploadHint('There is no image or file on the clipboard, only text. Copy an image or take a screenshot, or paste into the box below.'); return; }
+    void uploadPicked(blobs.map((blob, i) => clipName(new File([blob], '', { type: blob.type }), i)), false);
+  }
+  // a paste that carries files: upload them (true), or leave it to whoever else handles a paste (false)
+  function uploadPasted(event, target) {
+    const files = pastedFiles(event.clipboardData);
+    if (!files.length || uploading || readOnly) return false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!$uploadDialog.open) openUpload(target);
+    if (!$uploadPick.hidden) void uploadPicked(files, false);
+    return true;
+  }
+  document.getElementById('upload-pick-clipboard').addEventListener('click', () => { void uploadClipboard(); });
+  document.addEventListener('paste', (e) => { if ($uploadDialog.open && !$uploadPick.hidden) uploadPasted(e, uploadTarget); });
+  $pasteZone.addEventListener('paste', (e) => { if (!uploadPasted(e, uploadTarget)) { e.preventDefault(); uploadHint('That was text, not an image or a file.'); } });
+  $pasteZone.addEventListener('beforeinput', (e) => { if (e.inputType !== 'insertFromPaste') e.preventDefault(); }); // nothing is typed into it
+  $pasteZone.addEventListener('input', () => { $pasteZone.textContent = ''; });
+  $composerInput.addEventListener('paste', (e) => { uploadPasted(e, 'composer'); });
   $upload.addEventListener('click', () => openUpload('term'));
   document.getElementById('composer-attach').addEventListener('click', () => openUpload('composer'));
   document.getElementById('upload-pick-files').addEventListener('click', () => { $uploadFiles.value = ''; $uploadFiles.click(); });
@@ -1319,7 +1369,7 @@
       syncSend();
       $composerInput.focus();
     } else {
-      w?.term?.paste(uploadText); // bracketed when the program asked for it: Claude Code then attaches a pasted image path
+      activeTerm()?.paste(uploadText); // bracketed when the program asked for it: Claude Code then attaches a pasted image path
       if (!coarse) w?.term?.focus();
     }
   });
@@ -1967,6 +2017,7 @@
 
     // Ctrl/Cmd+C copies a local selection; with no selection, Ctrl+C still reaches the program.
     doc.addEventListener('keydown', copyKey, true);
+    doc.addEventListener('paste', (e) => { uploadPasted(e, 'term'); }, true); // an image or a file: uploaded, its path pasted
     // Also supply real text for native Copy and ttyd's selection-copy callback.
     doc.addEventListener('copy', (event) => {
       const text = selection();
@@ -2209,6 +2260,7 @@
       void writeClipboard(term.getSelection(), $scratch).then((ok) => scratchStatus(ok ? 'Copied' : 'The browser did not allow copying.', ok ? 'ok' : 'error'));
     }, true);
     doc.addEventListener('pointerdown', () => { hideCmdMenu(); closeArrowPop(); }, true);
+    doc.addEventListener('paste', (e) => { uploadPasted(e, 'term'); }, true);
     scratchStatus('');
     setTimeout(() => term.fit(), 60);
     if (pendingCd) { cdScratch(pendingCd); pendingCd = null; }
