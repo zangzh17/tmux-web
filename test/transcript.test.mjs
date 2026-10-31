@@ -305,3 +305,13 @@ test('the session list says how full each Claude conversation is', async () => {
     api.tmux('kill-session', '-t', plain);
   }
 });
+
+test('the copies of each request Claude Code logs (api-request-blob) are not the conversation', async () => {
+  const blob = (role, content) => ({ type: 'api-request-blob', hash: 'h', message: { role, content } });
+  write([blob('user', [{ type: 'text', text: 'hello once' }]), user('hello once'), blob('assistant', [{ type: 'text', text: 'hi once' }]),
+    assistant({ type: 'text', text: 'hi once' }), blob('system', 'You are Claude Code')], 'blob.jsonl');
+  try {
+    const res = await transcript();
+    assert.deepEqual(stripTs(res.body.items), [{ kind: 'user', text: 'hello once' }, { kind: 'assistant', text: 'hi once' }]);
+  } finally { fs.rmSync(file('blob.jsonl'), { force: true }); }
+});

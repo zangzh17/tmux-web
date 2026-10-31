@@ -117,7 +117,12 @@
 
   // ---- terminal handle (ttyd exposes the xterm.js instance as window.term)
   let w = null;
-  const send = (seq) => { if (w && w.term) w.term.input(seq, true); };
+  let scratch = null; // the scratch terminal while one is open: { id, instance, name, path } (see openScratch)
+  let sw = null; // its ttyd window, once the terminal is up in it
+  // The key bar, the commands menu and the file manager type into the scratch terminal while it is open.
+  const activeTerm = () => (scratch ? sw?.term : w?.term);
+  const send = (seq) => { activeTerm()?.input(seq, true); };
+  const mainPut = (seq) => { w?.term?.input(seq, true); };
 
   // ---- rename in place; immutable tmux IDs keep attach/reconnect and close on the same session
   let editing = false;
@@ -781,6 +786,7 @@
     peekOpen = on;
     $peek.hidden = !on;
     $peekToggle.setAttribute('aria-pressed', String(on));
+    document.getElementById('working-screen').setAttribute('aria-pressed', String(on));
     if (on) { void updatePeek().catch(() => { $peekScreen.textContent = 'Could not read the terminal screen.'; }); pollSoon(1500); }
   }
   const liveSelection = () => {
@@ -822,7 +828,7 @@
   $composerInput.addEventListener('blur', () => { $textDialog.classList.remove('typing'); });
   $composerSend.addEventListener('click', () => { void sendMessage(); });
   $peekToggle.addEventListener('click', () => setPeek(!peekOpen));
-  document.getElementById('working-screen').addEventListener('click', () => setPeek(true));
+  document.getElementById('working-screen').addEventListener('click', () => setPeek(!peekOpen)); // shows the screen, and hides it again
   document.getElementById('working-stop').addEventListener('click', () => { void sendKey('Escape'); });
   $workingNow.addEventListener('click', () => { void sendKey('SendNow'); });
   $jump.addEventListener('click', () => { toBottom(); $jump.hidden = true; });
@@ -915,6 +921,10 @@
     layoutChat({ bottom: true });
   });
   document.getElementById('text-done').addEventListener('click', () => $textDialog.close());
+  // The view itself never scrolls (the conversation and the composer scroll inside it): scrolled, as iOS does to keep a focused
+  // box in sight when the composer and the screen panel were taller than what the keyboard left, it hid the heading's buttons
+  // under the status bar, out of reach.
+  $textDialog.addEventListener('scroll', () => { if ($textDialog.scrollTop) $textDialog.scrollTop = 0; });
   $textDialog.addEventListener('close', () => {
     prefs.set('view', 'term');
     generation++;
@@ -1036,15 +1046,18 @@
     w?.term?.selectAll();
     hideMenu(true);
   });
-  document.getElementById('menu-paste').addEventListener('click', async () => {
-    hideMenu();
+  // The clipboard into a terminal (bracketed when the program asked for it); `fallback` when the browser will not hand it over.
+  async function pasteInto(term, fallback) {
     try {
       if (!navigator.clipboard?.readText) throw new Error('Clipboard API unavailable');
       const text = await navigator.clipboard.readText();
-      w?.term?.paste(text);
-    } catch {
-      clipboardNotice(`Use ${isMac ? 'Cmd' : 'Ctrl'}+V to paste, or allow clipboard access for this site.`, true);
-    } finally { w?.term?.focus(); }
+      if (text) term?.paste(text);
+    } catch { fallback(); return; }
+    if (!coarse) term?.focus();
+  }
+  document.getElementById('menu-paste').addEventListener('click', () => {
+    hideMenu();
+    void pasteInto(w?.term, () => { clipboardNotice(`Use ${isMac ? 'Cmd' : 'Ctrl'}+V to paste, or allow clipboard access for this site.`, true); w?.term?.focus(); });
   });
   function openMenu(x, y) {
     $menuCopy.disabled = !selection();
@@ -1446,34 +1459,44 @@
   // ---- key bar
   // Up/down and left/right are told apart by colour, and on a phone a key sits between the two pairs so a thumb does not hit
   // the wrong one. A tablet has room for bigger keys, Ctrl+C and Send now, and arrows laid out as arrows, with Enter in the middle.
-  // Page up/down are not on the bar: they float as bubbles on both edges of the terminal (#pager-left/right).
+  // Page up/down are not on the bar: they float as bubbles on both edges of the terminal (#pager-left/right). On a touch screen
+  // ← and → held offer 5×, 10× and 20× (#arrow-pop) instead of repeating. `only` keys are hidden where they mean nothing.
   const K = {
-    esc: { l: 'Esc', s: '\x1b' }, menu: { menu: true, title: 'Common commands' }, clear: { l: 'Clear', s: '\x15', title: 'Clear input (Ctrl+U)' },
+    esc: { l: 'Esc', s: '\x1b' }, menu: { menu: true, title: 'Common commands' },
+    ctrlu: { l: '^U', s: '\x15', cls: 'ctl', title: 'Ctrl+U: clear the line' },
+    ctrla: { l: '^A', s: '\x01', cls: 'ctl', title: 'Ctrl+A: start of the line' },
+    ctrle: { l: '^E', s: '\x05', cls: 'ctl', title: 'Ctrl+E: end of the line' },
+    bs: { l: '⌫', s: '\x7f', rep: 1, cls: 'bs', title: 'Backspace' },
     up: { l: '↑', s: '\x1b[A', rep: 1, cls: 'v', title: 'Up' }, down: { l: '↓', s: '\x1b[B', rep: 1, cls: 'v', title: 'Down' },
-    left: { l: '←', s: '\x1b[D', rep: 1, cls: 'h', title: 'Left' }, right: { l: '→', s: '\x1b[C', rep: 1, cls: 'h', title: 'Right' },
+    left: { l: '←', s: '\x1b[D', rep: 1, multi: 1, cls: 'h', title: 'Left' }, right: { l: '→', s: '\x1b[C', rep: 1, multi: 1, cls: 'h', title: 'Right' },
     tab: { l: 'Tab', s: '\t' }, btab: { l: '⇧Tab', s: '\x1b[Z', title: 'Shift+Tab (Claude: cycle the permission mode)' },
     ctrlc: { l: '^C', s: '\x03', cls: 'warn', title: 'Ctrl+C: interrupt (pressed twice, it quits Claude)' },
     // Claude Code's chat:sendNow chord: a message queued while Claude works is sent at once, interrupting the turn
-    now: { l: 'Send now', s: '\x18\x13', cls: 'now', title: 'Send now (Ctrl+X Ctrl+S): Claude sends the queued message at once, interrupting its turn' },
+    now: { l: 'Send now', s: '\x18\x13', cls: 'now', only: 'claude', title: 'Send now (Ctrl+X Ctrl+S): Claude sends the queued message at once, interrupting its turn' },
     pipe: { l: '|', s: '|' }, slash: { l: '/', s: '/' }, tilde: { l: '~', s: '~' },
     enter: { l: 'Enter', s: '\r', cls: 'enter', title: 'Enter' },
     pgup: { svg: '<path d="m7 11 5-5 5 5M7 18l5-5 5 5"/>', s: '\x1b[5~', rep: 1, title: 'Page up' },
     pgdn: { svg: '<path d="m7 6 5 5 5-5M7 13l5 5 5-5"/>', s: '\x1b[6~', rep: 1, title: 'Page down' },
   };
+  // A phone's two rows (Enter takes the right edge of both): ↑↓ above, ←→ below, never one pair right over the other.
   const BAR = DEVICE === 'tablet'
-    ? { main: ['esc', 'menu', 'ctrlc', 'clear', 'tab', 'now', 'btab', 'pipe', 'slash', 'tilde'], pad: ['up', 'left', 'enter', 'right', 'down'] }
-    : { main: ['esc', 'menu', 'clear', 'up', 'down', 'tab', 'left', 'right', 'pipe', 'slash', 'tilde', 'enter'] };
+    ? { main: ['esc', 'menu', 'ctrlc', 'ctrlu', 'ctrla', 'ctrle', 'bs', 'tab', 'now', 'btab', 'pipe', 'slash', 'tilde'], pad: ['up', 'left', 'enter', 'right', 'down'] }
+    : DEVICE === 'phone'
+      ? { main: ['esc', 'menu', 'tab', 'ctrlu', 'up', 'down', 'bs', 'enter', 'ctrla', 'left', 'right', 'ctrle', 'pipe', 'slash', 'tilde'] }
+      : { main: ['esc', 'menu', 'tab', 'ctrla', 'ctrle', 'ctrlu', 'left', 'right', 'up', 'down', 'pipe', 'slash', 'tilde', 'bs', 'enter'] };
   // The commands menu (the second key). Typed text is submitted with a separate Enter a moment later: Claude Code treats text that
   // arrives together with a newline as a paste and would not submit it. `claude` is the only one with a guard: typed into a
   // running Claude it would be sent to it as a message. A row with `chips` is one row of choices (/effort max, xhigh, …).
+  // Claude's own commands (only: 'claude') are hidden where Claude does not run, and `claude` where it does (see applyMode).
   const COMMANDS = [
-    { name: 'claude', hint: 'Start, skip permissions', text: 'claude --dangerously-skip-permissions', enter: true, notInClaude: true },
-    { name: '/resume', hint: 'Pick a past conversation', text: '/resume', enter: true },
-    { name: '/compact', hint: 'Compress the context', text: '/compact', enter: true },
-    { name: '/model', hint: 'Switch the model', text: '/model', enter: true },
-    { name: '/effort', hint: 'Set the thinking effort', text: '/effort', enter: true },
-    { name: '/effort', chips: ['max', 'xhigh', 'high', 'medium', 'low'] },
-    { name: 'Send now', hint: 'Queued message, at once', text: '\x18\x13', title: 'Ctrl+X Ctrl+S' },
+    { name: 'claude', hint: 'Start, skip permissions', text: 'claude --dangerously-skip-permissions', enter: true, notInClaude: true, only: 'shell' },
+    { name: '/resume', hint: 'Pick a past conversation', text: '/resume', enter: true, only: 'claude' },
+    { name: '/compact', hint: 'Compress the context', text: '/compact', enter: true, only: 'claude' },
+    { name: '/model', hint: 'Switch the model', text: '/model', enter: true, only: 'claude' },
+    { name: '/effort', hint: 'Set the thinking effort', text: '/effort', enter: true, only: 'claude' },
+    { name: '/effort', chips: ['max', 'xhigh', 'high', 'medium', 'low'], only: 'claude' },
+    { name: 'Send now', hint: 'Queued message, at once', text: '\x18\x13', title: 'Ctrl+X Ctrl+S', only: 'claude' },
+    { name: 'Paste', hint: 'From the clipboard', paste: true, title: 'Paste the clipboard into the terminal' },
     { name: 'Ctrl-C', hint: 'Interrupt', text: '\x03', title: 'Ctrl+C' },
   ];
   const $cmdMenu = document.getElementById('cmd-menu');
@@ -1483,11 +1506,62 @@
     $cmdMenu.hidden = true;
     $cmdButton?.setAttribute('aria-expanded', 'false');
   };
+  // ← / → held on a touch screen: a row of 5×, 10×, 20× over the key. Slide onto one and let go, or let go and tap one.
+  const $arrowPop = document.getElementById('arrow-pop');
+  const ARROW_TIMES = [5, 10, 20];
+  let arrowFor = null; // the key button the row belongs to
+  let arrowKey = null;
+  function openArrowPop(button, k) {
+    arrowFor = button;
+    arrowKey = k;
+    $arrowPop.replaceChildren(...ARROW_TIMES.map((n) => {
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.dataset.n = String(n);
+      option.setAttribute('role', 'menuitem');
+      option.setAttribute('aria-label', `${k.title} ${n} times`);
+      const times = document.createElement('small');
+      times.textContent = `×${n}`;
+      option.append(k.l, times);
+      return option;
+    }));
+    $arrowPop.hidden = false;
+    const app = document.getElementById('app').getBoundingClientRect();
+    const r = button.getBoundingClientRect();
+    $arrowPop.style.left = `${Math.max(6, Math.min(r.left + r.width / 2 - $arrowPop.offsetWidth / 2 - app.left, app.width - $arrowPop.offsetWidth - 6))}px`;
+    $arrowPop.style.top = `${Math.max(6, r.top - app.top - $arrowPop.offsetHeight - 8)}px`;
+    navigator.vibrate?.(8);
+  }
+  function closeArrowPop() { $arrowPop.hidden = true; arrowFor = arrowKey = null; }
+  function hotArrow(x, y) { // the option under the finger (a little slack above and below), highlighted
+    let n = 0;
+    for (const option of $arrowPop.children) {
+      const r = option.getBoundingClientRect();
+      const on = x >= r.left - 3 && x <= r.right + 3 && y >= r.top - 16 && y <= r.bottom + 16;
+      option.classList.toggle('hot', on);
+      if (on) n = +option.dataset.n;
+    }
+    return n;
+  }
+  function repeatKey(k, n) { // a little apart, as if typed
+    let i = 0;
+    const tick = () => { send(k.s); if (++i < n) setTimeout(tick, 12); };
+    tick();
+  }
+  $arrowPop.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the terminal's focus (and the phone keyboard)
+  $arrowPop.addEventListener('click', (e) => {
+    const option = e.target.closest('button');
+    if (option && arrowKey) { repeatKey(arrowKey, +option.dataset.n); closeArrowPop(); }
+  });
+  document.addEventListener('pointerdown', (e) => { if (!$arrowPop.hidden && !$arrowPop.contains(e.target) && !arrowFor?.contains(e.target)) closeArrowPop(); }, true);
+  window.addEventListener('resize', closeArrowPop);
   function keyButton(k, pos) {
     const b = document.createElement('button');
     b.type = 'button';
     if (k.cls) b.className = k.cls;
+    if (k.only) b.classList.add(`${k.only}-only`);
     if (pos) b.dataset.pos = pos;
+    const multi = !!k.multi && coarse;
     if (k.menu) {
       b.className = 'cmds';
       b.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 8 4 4-4 4M13 17h5"/></svg>';
@@ -1510,7 +1584,14 @@
       e.preventDefault();
       cancel();
       gesture = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false, repeated: false };
-      if (k.rep) holdTimer = setTimeout(() => {
+      if (multi) {
+        try { b.setPointerCapture(e.pointerId); } catch { /* keeps getting the moves anyway */ }
+        holdTimer = setTimeout(() => {
+          if (!gesture || gesture.moved) return;
+          gesture.repeated = true;
+          openArrowPop(b, k);
+        }, 380);
+      } else if (k.rep) holdTimer = setTimeout(() => {
         if (!gesture || gesture.moved) return;
         gesture.repeated = true;
         fire();
@@ -1519,6 +1600,7 @@
     });
     b.addEventListener('pointermove', (e) => {
       if (!gesture || gesture.id !== e.pointerId) return;
+      if (arrowFor === b) { hotArrow(e.clientX, e.clientY); return; }
       if (Math.hypot(e.clientX - gesture.x, e.clientY - gesture.y) > 8) {
         gesture.moved = true;
         stopRepeat();
@@ -1526,6 +1608,12 @@
     });
     b.addEventListener('pointerup', (e) => {
       if (!gesture || gesture.id !== e.pointerId) return;
+      if (arrowFor === b) { // let go on an option: that many; elsewhere the row stays for a tap
+        const n = hotArrow(e.clientX, e.clientY);
+        cancel();
+        if (n) { repeatKey(k, n); closeArrowPop(); }
+        return;
+      }
       const r = b.getBoundingClientRect();
       const tapped = !gesture.moved && !gesture.repeated
         && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
@@ -1551,7 +1639,7 @@
   const cmdRows = COMMANDS.map((c) => {
     if (c.chips) {
       const row = document.createElement('div');
-      row.className = 'c-chips';
+      row.className = `c-chips${c.only ? ` ${c.only}-only` : ''}`;
       row.setAttribute('role', 'group');
       row.setAttribute('aria-label', `${c.name} …`);
       const name = document.createElement('span');
@@ -1574,6 +1662,7 @@
     const row = document.createElement('button');
     row.type = 'button';
     row.setAttribute('role', 'menuitem');
+    if (c.only) row.classList.add(`${c.only}-only`);
     row.title = c.title || c.text;
     const name = document.createElement('span');
     name.className = 'c-name';
@@ -1590,16 +1679,27 @@
   const $cmdInfo = document.createElement('div');
   $cmdInfo.className = 'c-info';
   $cmdMenu.append($cmdInfo);
-  // Is Claude the foreground program of this pane? Positive detection only: if the check fails the command is allowed.
+  // Is Claude the foreground program of this pane? Positive detection only: if the check fails (null) the command is allowed.
   async function claudeRunning() {
     try {
       const res = await fetch('api/sessions?owner=all&preview=0', { credentials: 'same-origin', cache: 'no-store' });
-      if (!res.ok) return false;
+      if (!res.ok) return null;
       const mine = (await res.json()).sessions.find((s) => s.id === sessionId);
       if (mine) lastRow = mine;
-      return !!mine && /claude/i.test(mine.command || '');
-    } catch { return false; }
+      const running = !!mine && (mine.claude ?? /claude/i.test(mine.command || ''));
+      if (claudeHere !== running) { claudeHere = running; applyMode(); }
+      return running;
+    } catch { return null; }
   }
+  // ---- Claude or a shell: Claude's own commands (and Send now) are offered only while Claude runs here, never in the scratch
+  // terminal, and `claude` (to start it) only while it does not. Not known yet: everything is offered.
+  let claudeHere = null;
+  function applyMode() {
+    const root = document.documentElement.classList;
+    root.toggle('mode-claude', !scratch && claudeHere === true);
+    root.toggle('mode-shell', !!scratch || claudeHere === false);
+  }
+  setInterval(() => { if (!document.hidden && sessionId && !readOnly) void claudeRunning(); }, 20000);
   function toggleCmdMenu() {
     if (!$cmdMenu.hidden) { hideCmdMenu(); return; }
     const app = document.getElementById('app');
@@ -1610,19 +1710,21 @@
     $cmdMenu.style.bottom = `${app.clientHeight - $keys.offsetTop + 6}px`;
     $cmdMenu.style.left = `${Math.max(6, Math.min(btn.left - appBox.left, appBox.width - $cmdMenu.offsetWidth - 6))}px`;
     for (const r of cmdRows) { r.row.disabled = false; r.hint.textContent = r.c.hint; }
+    const offered = (r) => !r.row.disabled && r.row.offsetParent !== null; // hidden rows (see applyMode) take no focus
     $cmdInfo.textContent = diagText();
     void claudeRunning().then((running) => {
       if ($cmdMenu.hidden) return;
       $cmdInfo.textContent = diagText();
       for (const r of cmdRows) if (r.c.notInClaude && running) { r.row.disabled = true; r.hint.textContent = 'Already running'; }
       const focused = document.activeElement;
-      if (!coarse && (!$cmdMenu.contains(focused) || focused.disabled)) cmdRows.find((r) => !r.row.disabled)?.row.focus(); // the focused row was just disabled
+      if (!coarse && (!$cmdMenu.contains(focused) || focused.disabled || focused.offsetParent === null)) cmdRows.find(offered)?.row.focus(); // the focused row was just disabled or hidden
     });
-    if (!coarse) cmdRows.find((r) => !r.row.disabled)?.row.focus();
+    if (!coarse) cmdRows.find(offered)?.row.focus();
   }
   async function runCommand(c, row) {
-    if (c.notInClaude && await claudeRunning()) { row.disabled = true; row.querySelector('.c-hint').textContent = 'Already running'; return; }
+    if (c.notInClaude && !scratch && await claudeRunning()) { row.disabled = true; row.querySelector('.c-hint').textContent = 'Already running'; return; }
     hideCmdMenu();
+    if (c.paste) { void pasteInto(activeTerm(), () => (scratch ? showPasteBox() : clipboardNotice(`Use ${isMac ? 'Cmd' : 'Ctrl'}+V to paste, or allow clipboard access for this site.`, true))); return; }
     send(c.text);
     if (c.enter) setTimeout(() => send('\r'), 150);
     if (!coarse) w?.term?.focus();
@@ -1637,7 +1739,7 @@
   };
   document.addEventListener('keydown', escapeMenu, true);
   $cmdMenu.addEventListener('keydown', (event) => {
-    const buttons = [...$cmdMenu.querySelectorAll('button:not(:disabled)')];
+    const buttons = [...$cmdMenu.querySelectorAll('button:not(:disabled)')].filter((b) => b.offsetParent !== null);
     const index = buttons.indexOf(document.activeElement);
     let next;
     if (event.key === 'ArrowDown') next = (index + 1) % buttons.length;
@@ -1780,7 +1882,7 @@
   // and only the input event that follows carries the real character. xterm.js trusts the keydown, so ， arrived twice or as ",",
   // and a mark typed right after a pinyin commit overtook the commit. Here xterm still gets the control keys (Enter, Backspace,
   // arrows, Ctrl/Alt chords); every printable character is sent from the input event or from the composition's result instead.
-  function softKeyboardInput(doc) {
+  function softKeyboardInput(doc, put) {
     const ta = doc.querySelector('.xterm-helper-textarea');
     if (!ta) return;
     let composing = false; let committed = null;
@@ -1796,7 +1898,7 @@
       if (!own(e)) return;
       e.stopImmediatePropagation();
       composing = false;
-      if (e.data) { send(e.data); committed = e.data; setTimeout(() => { committed = null; }, 80); }
+      if (e.data) { put(e.data); committed = e.data; setTimeout(() => { committed = null; }, 80); }
       tidy();
     }, true);
     doc.addEventListener('input', (e) => {
@@ -1805,20 +1907,48 @@
       if (composing || e.isComposing || /Composition/.test(e.inputType || '')) return;
       const data = e.data ?? e.dataTransfer?.getData('text/plain');
       if (data && committed !== null && data === committed) { committed = null; return; } // Safari repeats the commit as an input event
-      if (data && (e.inputType === 'insertText' || e.inputType === 'insertReplacementText')) send(data);
+      if (data && (e.inputType === 'insertText' || e.inputType === 'insertReplacementText')) put(data);
       tidy(); // Enter, Backspace and the like already went to xterm as keys
     }, true);
   }
 
   // ---- wire up once ttyd has created the terminal
+  const THEME = { background: '#0b0e14', foreground: '#d6dae3', cursor: '#6ea8ff', selectionBackground: '#33467c',
+    black: '#1b1f2a', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68', blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#c0caf5',
+    brightBlack: '#414868', brightRed: '#ff899d', brightGreen: '#b9f27c', brightYellow: '#ffc777', brightBlue: '#9abdf5', brightMagenta: '#c9a9ff', brightCyan: '#a4daff', brightWhite: '#e6e9ef' };
+  // CJK glyphs fall back per character, so no CJK mono font here (it would win and make Latin text narrow/tall).
+  const FONT = '"JetBrains Mono", "Fira Code", "SF Mono", ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace';
+  // One-finger vertical swipe -> mouse-wheel events, so tmux (mouse on) scrolls its history.
+  function swipeToWheel(win, put, wanted) {
+    const doc = win.document;
+    let lastY = null; let acc = 0; let active = false;
+    doc.addEventListener('touchstart', (e) => {
+      active = e.touches.length === 1 && wanted();
+      lastY = active ? e.touches[0].clientY : null; acc = 0;
+    }, { passive: true });
+    doc.addEventListener('touchmove', (e) => {
+      if (!active || e.touches.length !== 1) return;
+      e.preventDefault();
+      const t = e.touches[0];
+      acc += t.clientY - lastY; lastY = t.clientY;
+      const screen = doc.querySelector('.xterm-screen');
+      if (!screen) return;
+      const r = screen.getBoundingClientRect();
+      const step = (r.height / win.term.rows) * 2.5;
+      const col = Math.min(win.term.cols, Math.max(1, Math.floor(((t.clientX - r.left) / r.width) * win.term.cols) + 1));
+      const row = Math.min(win.term.rows, Math.max(1, Math.floor(((t.clientY - r.top) / r.height) * win.term.rows) + 1));
+      while (Math.abs(acc) >= step) {
+        // finger down = look at older output = wheel up (64); finger up = wheel down (65)
+        put(`\x1b[<${acc > 0 ? 64 : 65};${col};${row}M`);
+        acc -= Math.sign(acc) * step;
+      }
+    }, { passive: false });
+  }
   function setup() {
     const doc = w.document;
-    const theme = { background: '#0b0e14', foreground: '#d6dae3', cursor: '#6ea8ff', selectionBackground: '#33467c',
-      black: '#1b1f2a', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68', blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#c0caf5',
-      brightBlack: '#414868', brightRed: '#ff899d', brightGreen: '#b9f27c', brightYellow: '#ffc777', brightBlue: '#9abdf5', brightMagenta: '#c9a9ff', brightCyan: '#a4daff', brightWhite: '#e6e9ef' };
+    const theme = THEME;
     w.term.options.theme = theme;
-    // CJK glyphs fall back per character, so no CJK mono font here (it would win and make Latin text narrow/tall).
-    w.term.options.fontFamily = '"JetBrains Mono", "Fira Code", "SF Mono", ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace';
+    w.term.options.fontFamily = FONT;
     w.term.options.macOptionClickForcesSelection = true;
     w.term.options.altClickMovesCursor = false;
     doc.body.style.background = theme.background;
@@ -1826,7 +1956,7 @@
     tightStyle.textContent = 'html.tight #terminal-container .terminal { padding: 2px; height: calc(100% - 4px); }';
     doc.head.appendChild(tightStyle);
     doc.querySelector('.xterm-helper-textarea')?.setAttribute('autocomplete', 'off'); // best effort: no iOS AutoFill bar (it eats ~90px)
-    if (coarse && !readOnly) softKeyboardInput(doc);
+    if (coarse && !readOnly) softKeyboardInput(doc, mainPut);
     doc.documentElement.style.background = theme.background;
     const box = doc.getElementById('terminal-container');
     if (box) box.style.touchAction = 'none';
@@ -1888,31 +2018,372 @@
       if (w.term.modes.mouseTrackingMode !== 'none') w.term.write('\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l', () => { appMouse = true; });
     }
     const mouseWanted = () => (coarse ? appMouse : w.term.modes.mouseTrackingMode !== 'none');
-
-    // One-finger vertical swipe -> mouse-wheel events, so tmux (mouse on) scrolls its history.
-    let lastY = null; let acc = 0; let active = false;
-    doc.addEventListener('touchstart', (e) => {
-      active = e.touches.length === 1 && mouseWanted();
-      lastY = active ? e.touches[0].clientY : null; acc = 0;
-    }, { passive: true });
-    doc.addEventListener('touchmove', (e) => {
-      if (!active || e.touches.length !== 1) return;
-      e.preventDefault();
-      const t = e.touches[0];
-      acc += t.clientY - lastY; lastY = t.clientY;
-      const screen = doc.querySelector('.xterm-screen');
-      if (!screen) return;
-      const r = screen.getBoundingClientRect();
-      const step = (r.height / w.term.rows) * 2.5;
-      const col = Math.min(w.term.cols, Math.max(1, Math.floor(((t.clientX - r.left) / r.width) * w.term.cols) + 1));
-      const row = Math.min(w.term.rows, Math.max(1, Math.floor(((t.clientY - r.top) / r.height) * w.term.rows) + 1));
-      while (Math.abs(acc) >= step) {
-        // finger down = look at older output = wheel up (64); finger up = wheel down (65)
-        send(`\x1b[<${acc > 0 ? 64 : 65};${col};${row}M`);
-        acc -= Math.sign(acc) * step;
-      }
-    }, { passive: false });
+    swipeToWheel(w, mainPut, mouseWanted);
   }
+
+  // ---- scratch terminal: a throwaway shell over the lower part of the page (a floating window on a wide screen), in this
+  // session's directory or a folder picked in Files. The server makes it a hidden tmux session (POST api/scratch). Close ends
+  // it, and so does leaving the page (the server's sweep catches a page that could not say so). While it is open the key bar,
+  // the commands menu and Files type into it, and only its shell commands are offered.
+  const $scratch = document.getElementById('scratch');
+  const $scratchFrame = document.getElementById('scratch-frame');
+  const $scratchOpen = document.getElementById('scratch-open');
+  const $scratchWhere = document.getElementById('scratch-where');
+  const $scratchStatus = document.getElementById('scratch-status');
+  const $scratchTall = document.getElementById('scratch-tall');
+  const $pasteBox = document.getElementById('scratch-pastebox');
+  const $pasteText = document.getElementById('scratch-pastetext');
+  let scratchReloads = [];
+  const scratchStatus = (text, error = false) => { $scratchStatus.textContent = text; $scratchStatus.classList.toggle('error', error); $scratchStatus.hidden = !text; };
+  const endScratch = (s, keepalive = false) => fetch(`api/sessions/${encodeURIComponent(s.id)}`, {
+    method: 'DELETE', credentials: 'same-origin', cache: 'no-store', keepalive,
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirmed: true, instance: s.instance }),
+  }).catch(() => {});
+  async function openScratch(folder = null) {
+    if (scratch && !folder) { $scratch.hidden = false; if (!coarse) sw?.term?.focus(); return; }
+    if (scratch) closeScratch(false);
+    const mine = { pending: true };
+    scratch = mine; // keys typed while it starts go nowhere rather than into the session underneath
+    $scratch.hidden = false;
+    $scratchOpen.setAttribute('aria-expanded', 'true');
+    $scratchWhere.textContent = '';
+    scratchStatus('Starting a shell…');
+    hideCmdMenu();
+    applyMode();
+    try {
+      const res = await fetch('api/scratch', {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(folder ? { cwd: folder } : sessionId ? { from: sessionId } : {}),
+      });
+      if (!res.ok) throw new Error(res.status === 429 ? 'Too many scratch terminals are open on this account. Close one first.' : 'Could not start a scratch terminal. Try again, or reload the page.');
+      const made = await res.json();
+      if (scratch !== mine) { void endScratch(made); return; } // closed while it was starting
+      scratch = made;
+      scratchReloads = [];
+      $scratchWhere.textContent = made.path;
+      $scratchWhere.title = made.path;
+      $scratchFrame.src = `term/?arg=${encodeURIComponent(made.id)}`;
+    } catch (error) {
+      if (scratch !== mine) return;
+      scratch = null;
+      applyMode();
+      scratchStatus(error.message, true);
+    }
+  }
+  function closeScratch(focus = true) {
+    const s = scratch;
+    scratch = null;
+    sw = null;
+    $scratchFrame.src = 'about:blank';
+    $scratch.hidden = true;
+    $scratch.classList.remove('tall');
+    $scratchTall.setAttribute('aria-pressed', 'false');
+    $pasteBox.hidden = true;
+    scratchStatus('');
+    $scratchOpen.setAttribute('aria-expanded', 'false');
+    applyMode();
+    if (s?.id) void endScratch(s);
+    if (focus && !coarse) w?.term?.focus();
+  }
+  $scratchFrame.addEventListener('load', () => {
+    const mine = scratch;
+    const win = $scratchFrame.contentWindow;
+    if (!mine?.id || !win) return;
+    const t0 = Date.now();
+    const timer = setInterval(() => {
+      if (scratch !== mine) { clearInterval(timer); return; }
+      if (win.term?.options) { clearInterval(timer); setupScratch(win); }
+      else if (Date.now() - t0 > 15000) { clearInterval(timer); scratchStatus('The terminal did not start. Close it and try again.', true); }
+    }, 100);
+  });
+  function setupScratch(win) {
+    sw = win;
+    const term = win.term;
+    const doc = win.document;
+    const put = (seq) => { win.term?.input(seq, true); };
+    term.options.theme = THEME;
+    term.options.fontFamily = FONT;
+    term.options.fontSize = Math.max(9, fs - (DEVICE === 'phone' ? 1 : 0));
+    doc.body.style.background = doc.documentElement.style.background = THEME.background;
+    doc.querySelector('.xterm-helper-textarea')?.setAttribute('autocomplete', 'off');
+    if (coarse) {
+      softKeyboardInput(doc, put);
+      swipeToWheel(win, put, () => term.modes.mouseTrackingMode !== 'none');
+    }
+    // Ctrl/Cmd+C copies a selection; with none, Ctrl+C reaches the shell
+    doc.addEventListener('keydown', (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'c' || !term.getSelection()) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      void copyText(term.getSelection());
+    }, true);
+    doc.addEventListener('pointerdown', () => { hideCmdMenu(); closeArrowPop(); }, true);
+    scratchStatus('');
+    setTimeout(() => term.fit(), 60);
+    if (!coarse) term.focus();
+  }
+  // `exit` (or a dropped connection, a phone that slept): ttyd offers to reconnect. Gone: close the panel; still there: load again.
+  async function scratchCheck() {
+    const mine = scratch;
+    if (!mine?.id || !sw || document.hidden || !askingToReconnect(sw.term)) return;
+    let gone;
+    try { gone = (await fetch(`api/sessions/${encodeURIComponent(mine.id)}/history?screen=1`, { credentials: 'same-origin', cache: 'no-store' })).status === 404; } catch { return; }
+    if (scratch !== mine) return;
+    if (gone) { closeScratch(); return; }
+    const now = Date.now();
+    scratchReloads = scratchReloads.filter((t) => now - t < 60000);
+    if (scratchReloads.length >= 3) { scratchStatus('The scratch terminal keeps disconnecting. Close it and open a new one.', true); return; }
+    scratchReloads.push(now);
+    sw = null;
+    $scratchFrame.src = `term/?arg=${encodeURIComponent(mine.id)}`;
+  }
+  setInterval(() => { void scratchCheck(); }, 2000);
+  document.addEventListener('visibilitychange', () => { void scratchCheck(); });
+  addEventListener('pagehide', () => { if (scratch?.id) { void endScratch(scratch, true); scratch = null; } });
+  function showPasteBox() {
+    $pasteBox.hidden = false;
+    $pasteText.value = '';
+    $pasteText.focus();
+  }
+  $scratchOpen.addEventListener('click', () => { if (scratch && !$scratch.hidden) closeScratch(); else void openScratch(); });
+  document.getElementById('scratch-close').addEventListener('click', () => closeScratch());
+  document.getElementById('scratch-paste').addEventListener('click', () => { void pasteInto(sw?.term, showPasteBox); });
+  $scratchTall.addEventListener('click', () => {
+    const on = !$scratch.classList.contains('tall');
+    $scratch.classList.toggle('tall', on);
+    $scratchTall.setAttribute('aria-pressed', String(on));
+    $scratchTall.title = on ? 'Shorter' : 'Taller';
+    $scratchTall.setAttribute('aria-label', $scratchTall.title);
+  });
+  $pasteBox.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if ($pasteText.value) sw?.term?.paste($pasteText.value);
+    $pasteText.value = '';
+    $pasteBox.hidden = true;
+    if (!coarse) sw?.term?.focus();
+  });
+  $pasteText.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); $pasteBox.hidden = true; } });
+  // Taps on the panel's buttons must not take the focus (and the phone keyboard) from its terminal.
+  for (const id of ['scratch-paste', 'scratch-tall']) keepFocus(document.getElementById(id));
+
+  // ---- files: a pop-up file manager (api/files) that opens in this session's directory (the scratch terminal's while that is
+  // open). A tap opens a folder; ⋯, or a tap on a file, shows what can be done with an entry. For the folder shown: cd here
+  // (typed into a shell, with Enter), insert its path, a scratch terminal there, a new folder, hidden files on request.
+  const $files = document.getElementById('files-dialog');
+  const $filesList = document.getElementById('files-list');
+  const $filesCrumbs = document.getElementById('files-crumbs');
+  const $filesStatus = document.getElementById('files-status');
+  const $filesUp = document.getElementById('files-up');
+  const $filesHidden = document.getElementById('files-hidden');
+  let folder = null; // the last answer: { path, parent, home, entries, truncated }
+  let showDot = store.get('filesHidden') === '1';
+  let filesGen = 0;
+  const filesStatus = (text, error = false) => { $filesStatus.textContent = text; $filesStatus.classList.toggle('error', error); $filesStatus.hidden = !text; };
+  const FILE_ERRORS = { 400: 'That name or place is not allowed.', 403: 'Permission denied.', 404: 'Not there any more (moved or deleted?).', 409: 'Something with that name is already there.' };
+  const join = (dir, name) => (dir === '/' ? `/${name}` : `${dir}/${name}`);
+  const kindOf = (e) => (e.type === 'dir' || e.type === 'link-dir' ? 'dir' : e.type === 'file' || e.type === 'link-file' ? 'file' : 'other');
+  const svgIcon = (inner, cls = '') => `<svg${cls ? ` class="${cls}"` : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+  const ICONS = {
+    dir: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="currentColor" fill-opacity="0.16"/>',
+    file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+    other: '<circle cx="12" cy="12" r="8"/><path d="M12 8v5M12 16h.01"/>',
+    link: '<path d="M10 14a4 4 0 0 0 5.6 0l3-3a4 4 0 0 0-5.6-5.6l-1 1M14 10a4 4 0 0 0-5.6 0l-3 3a4 4 0 0 0 5.6 5.6l1-1"/>',
+    more: '<circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/>',
+  };
+  const when = (t) => {
+    const d = new Date(t * 1000);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return d.toLocaleDateString([], d.getFullYear() === now.getFullYear() ? { month: 'short', day: 'numeric' } : { year: 'numeric', month: 'short', day: 'numeric' });
+  };
+  async function filesGo(target, keep = false) {
+    const gen = ++filesGen;
+    filesStatus('Loading…');
+    const query = target.path ? `?path=${encodeURIComponent(target.path)}` : target.from ? `?from=${encodeURIComponent(target.from)}` : '';
+    let res;
+    let body = {};
+    try {
+      res = await fetch(`api/files${query}`, { credentials: 'same-origin', cache: 'no-store' });
+      body = await res.json().catch(() => ({}));
+    } catch { if (gen === filesGen) filesStatus('No connection. Check your network and try again.', true); return; }
+    if (gen !== filesGen) return;
+    if (!res.ok) { filesStatus(`${FILE_ERRORS[res.status] || 'Could not open it.'}${body.path ? ` ${body.path}` : ''}`, true); return; }
+    folder = body;
+    renderFiles(keep);
+    filesStatus(body.truncated ? `Only the first ${body.entries.length} entries are shown.` : '');
+  }
+  function renderFiles(keep = false) {
+    const { path: here, home } = folder;
+    // ~ for the home folder and below it, / otherwise; then one button per folder down to this one
+    const crumbs = [];
+    let base = '';
+    let rest = here;
+    if (home && (here === home || here.startsWith(`${home}/`))) { crumbs.push(['~', home]); base = home; rest = here.slice(home.length); } else crumbs.push(['/', '/']);
+    for (const part of rest.split('/').filter(Boolean)) { base = `${base}/${part}`; crumbs.push([part, base]); }
+    $filesCrumbs.replaceChildren(...crumbs.flatMap(([label, target], i) => {
+      const b = make('button', null, label);
+      b.type = 'button';
+      b.title = target;
+      if (i === crumbs.length - 1) b.setAttribute('aria-current', 'location');
+      else b.addEventListener('click', () => { void filesGo({ path: target }); });
+      return i < crumbs.length - 1 && label !== '/' ? [b, make('span', 'sep', '/')] : [b];
+    }));
+    $filesCrumbs.scrollLeft = $filesCrumbs.scrollWidth;
+    $filesUp.disabled = !folder.parent;
+    const top = $filesList.scrollTop;
+    const shown = folder.entries.filter((e) => showDot || !e.name.startsWith('.'));
+    const rows = shown.map(fileRow);
+    if (!rows.length) rows.push(make('li', 'f-empty', folder.entries.length ? 'Only hidden files here (.hidden shows them).' : 'This folder is empty.'));
+    $filesList.replaceChildren(...rows);
+    $filesList.scrollTop = keep ? top : 0;
+  }
+  function fileRow(e) {
+    const kind = kindOf(e);
+    const li = make('li', `f-row${e.name.startsWith('.') ? ' dot' : ''}`);
+    li.dataset.kind = kind;
+    li.dataset.type = e.type;
+    const line = make('div', 'f-line');
+    const open = make('button', 'f-open');
+    open.type = 'button';
+    const icon = make('span', 'f-icon');
+    icon.innerHTML = svgIcon(ICONS[kind]) + (e.type.startsWith('link') ? svgIcon(ICONS.link, 'f-link') : ''); // fixed markup only
+    const text = make('span', 'f-text');
+    const what = kind === 'dir' ? (e.type === 'link-dir' ? 'link to a folder' : 'folder') : e.type === 'link-broken' ? 'broken link' : e.size != null ? formatBytes(e.size) : '';
+    text.append(make('span', 'f-name', e.name), make('span', 'f-meta', [what, e.mtime ? when(e.mtime) : ''].filter(Boolean).join(' · ')));
+    open.append(icon, text);
+    open.addEventListener('click', () => { if (kind === 'dir') void filesGo({ path: join(folder.path, e.name) }); else toggleActions(li, e); });
+    const more = make('button', 'f-more');
+    more.type = 'button';
+    more.innerHTML = svgIcon(ICONS.more);
+    more.setAttribute('aria-label', `More for ${e.name}`);
+    more.setAttribute('aria-expanded', 'false');
+    more.addEventListener('click', () => toggleActions(li, e));
+    line.append(open, more);
+    li.append(line);
+    return li;
+  }
+  const action = (label, run, cls = '') => {
+    const b = make('button', cls || null, label);
+    b.type = 'button';
+    b.addEventListener('click', run);
+    return b;
+  };
+  function closeActions(li) {
+    li.classList.remove('open');
+    li.querySelector('.f-actions')?.remove();
+    li.querySelector('.f-more')?.setAttribute('aria-expanded', 'false');
+  }
+  function toggleActions(li, e) {
+    const opened = li.classList.contains('open');
+    for (const other of $filesList.querySelectorAll('.f-row.open')) closeActions(other);
+    if (opened) return;
+    li.classList.add('open');
+    li.querySelector('.f-more').setAttribute('aria-expanded', 'true');
+    const full = join(folder.path, e.name);
+    const box = make('div', 'f-actions');
+    if (kindOf(e) === 'dir') box.append(action('cd', () => typeCd(full), 'shell-only'), action('Scratch here', () => scratchIn(full)));
+    box.append(action('Insert path', () => insertPath(full)), action('Copy path', () => { void copyText(full).then((ok) => filesStatus(ok ? `Copied ${full}` : 'The browser did not allow copying.', !ok)); }), action('Rename', () => startRename(li, e)),
+      action('Delete', () => confirmDelete(li, e, box), 'danger'));
+    li.append(box);
+  }
+  async function fileOp(body) {
+    filesStatus('Working…');
+    try {
+      const res = await fetch('api/files', { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      if (res.ok) { filesStatus(''); return true; }
+      filesStatus(FILE_ERRORS[res.status] || 'That did not work. Try again.', true);
+    } catch { filesStatus('No connection. Check your network and try again.', true); }
+    return false;
+  }
+  function confirmDelete(li, e, box) {
+    const what = e.type.startsWith('link') ? `the link “${e.name}” (not what it points to)` : kindOf(e) === 'dir' ? `the folder “${e.name}” and everything in it` : `“${e.name}”`;
+    box.replaceChildren(make('p', 'warn', `Delete ${what}?`),
+      action('Delete', async () => { if (await fileOp({ op: 'delete', path: folder.path, name: e.name })) void filesGo({ path: folder.path }, true); }, 'confirm'),
+      action('Cancel', () => closeActions(li)));
+    box.querySelector('.confirm').focus();
+  }
+  // a name typed in place of the row (rename) or in a new row at the top (new folder): Enter saves, Esc cancels, leaving saves
+  function nameInput(initial, label, save, cancel) {
+    const input = make('input', 'f-rename');
+    Object.assign(input, { type: 'text', value: initial, autocomplete: 'off', autocapitalize: 'off', spellcheck: false, enterKeyHint: 'done' });
+    input.setAttribute('aria-label', label);
+    let done = false;
+    const finish = async (keep) => {
+      if (done) return;
+      done = true;
+      const name = input.value.trim();
+      if (!keep || !name || name === initial) { cancel(); return; }
+      if (!(await save(name))) { done = false; input.focus(); }
+    };
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' && !ev.isComposing) { ev.preventDefault(); void finish(true); }
+      if (ev.key === 'Escape') { ev.preventDefault(); void finish(false); }
+    });
+    input.addEventListener('blur', () => { void finish(true); });
+    return input;
+  }
+  function startRename(li, e) {
+    li.querySelector('.f-actions')?.remove();
+    const line = li.querySelector('.f-line');
+    const icon = li.querySelector('.f-icon');
+    const input = nameInput(e.name, `New name for ${e.name}`,
+      async (to) => { const ok = await fileOp({ op: 'rename', path: folder.path, name: e.name, to }); if (ok) void filesGo({ path: folder.path }, true); return ok; },
+      () => renderFiles(true));
+    line.replaceChildren(icon, input);
+    icon.classList.add('f-icon-edit');
+    input.focus();
+    const dot = e.name.lastIndexOf('.');
+    input.setSelectionRange(0, dot > 0 && kindOf(e) !== 'dir' ? dot : e.name.length);
+  }
+  function newFolder() {
+    if (!folder) return;
+    for (const other of $filesList.querySelectorAll('.f-row.open')) closeActions(other);
+    $filesList.querySelector('.f-empty')?.remove();
+    const li = make('li', 'f-row open');
+    li.dataset.kind = 'dir';
+    const icon = make('span', 'f-icon f-icon-edit');
+    icon.innerHTML = svgIcon(ICONS.dir);
+    const input = nameInput('', 'Name of the new folder',
+      async (name) => { const ok = await fileOp({ op: 'mkdir', path: folder.path, name }); if (ok) void filesGo({ path: folder.path }, true); return ok; },
+      () => renderFiles(true));
+    input.placeholder = 'New folder name';
+    const line = make('div', 'f-line');
+    line.append(icon, input);
+    li.append(line);
+    $filesList.prepend(li);
+    $filesList.scrollTop = 0;
+    input.focus();
+  }
+  function afterFiles() { $files.close(); if (!coarse) activeTerm()?.focus(); }
+  function typeCd(dir) { send(`cd ${shellWord(dir)}`); setTimeout(() => send('\r'), 120); afterFiles(); }
+  function insertPath(full) { send(`${shellWord(full)} `); afterFiles(); }
+  function scratchIn(dir) { $files.close(); void openScratch(dir); }
+  document.getElementById('files').addEventListener('click', () => {
+    if ($files.open) return;
+    hideMenu();
+    hideCmdMenu();
+    closeArrowPop();
+    $filesHidden.setAttribute('aria-pressed', String(showDot));
+    $filesList.replaceChildren();
+    $filesCrumbs.replaceChildren();
+    folder = null;
+    $files.showModal();
+    void filesGo(scratch?.id ? { from: scratch.id } : sessionId ? { from: sessionId } : {});
+  });
+  document.getElementById('files-close').addEventListener('click', () => $files.close());
+  $filesUp.addEventListener('click', () => { if (folder?.parent) void filesGo({ path: folder.parent }); });
+  document.getElementById('files-home').addEventListener('click', () => { if (folder?.home) void filesGo({ path: folder.home }); });
+  document.getElementById('files-cd').addEventListener('click', () => { if (folder) typeCd(folder.path); });
+  document.getElementById('files-insert').addEventListener('click', () => { if (folder) insertPath(folder.path); });
+  document.getElementById('files-scratch').addEventListener('click', () => { if (folder) scratchIn(folder.path); });
+  document.getElementById('files-mkdir').addEventListener('click', newFolder);
+  $filesHidden.addEventListener('click', () => {
+    showDot = !showDot;
+    store.set('filesHidden', showDot ? '1' : '0');
+    $filesHidden.setAttribute('aria-pressed', String(showDot));
+    if (folder) renderFiles(true);
+  });
+  $files.addEventListener('close', () => { if (!coarse) activeTerm()?.focus(); });
 
   // ---- reconnect without asking
   // ttyd reconnects by itself only after a close it takes for a hiccup. Any socket error (what iOS reports for a socket it
@@ -1921,8 +2392,8 @@
   // presses Enter for them (ttyd's own reconnect), or loads the terminal again if ttyd does not take it. Paced, and only in front.
   let reconnects = [];
   let reconnecting = false;
-  const askingToReconnect = () => {
-    const el = w?.term?.element;
+  const askingToReconnect = (term = w?.term) => {
+    const el = term?.element;
     return !!el && [...el.children].some((n) => /Press ⏎ to Reconnect/.test(n.textContent) && !n.className && n.style.opacity !== '0');
   };
   async function sessionStillThere() {
@@ -1966,7 +2437,7 @@
   });
   // The foreground command says it; failing that (a wrapper, a renamed binary) ask for the conversation itself.
   async function isClaudePane(session) {
-    if (/claude/i.test(session.command || '')) return true;
+    if (session.claude ?? /claude/i.test(session.command || '')) return true;
     try { await getJson('transcript?count=1'); return true; } catch { return false; }
   }
   async function connect() {
@@ -2010,7 +2481,9 @@
       frame.src = `term/?arg=${encodeURIComponent(sessionId)}${readOnly ? '&arg=ro' : ''}`;
       // If Claude is what runs in it, open the way the last session was left on this kind of device: in the Read view (the
       // rendered conversation, also the default), as plain text, or (after Done) in the terminal.
-      if (await isClaudePane(session)) {
+      claudeHere = await isClaudePane(session);
+      applyMode();
+      if (claudeHere) {
         await Promise.race([prefs.ready, new Promise((resolve) => setTimeout(resolve, 1500))]);
         const view = prefs.get('view');
         if (view !== 'term') openReader(view === 'text', view === 'text' ? $plain : $read);

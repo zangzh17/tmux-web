@@ -130,7 +130,7 @@
   #terminal-menu button:disabled { cursor: default; }
   #selection-hint { max-width: 230px; margin: 5px 10px 4px; color: var(--muted); font-size: 12px; line-height: 1.4; }
   #text-dialog { position: fixed; inset: auto; top: var(--vt, 0px); left: 0; width: 100%; max-width: none; height: var(--vh, 100dvh); max-height: none; margin: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); border: 0; border-radius: 0; background: var(--bg); }
-  #text-dialog[open] { display: flex; flex-direction: column; }
+  #text-dialog[open] { display: flex; flex-direction: column; overflow: hidden; }
   .text-heading { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 12px; background: var(--bar); border-bottom: 1px solid var(--line); }
   #text-heading { margin: 0; font-size: 17px; } /* screen readers only (.sr-only): the visible top-left control is Detach */
   .text-back { display: inline-flex; flex: none; align-items: center; gap: 1px; min-height: 34px; padding: 0 10px 0 4px; border-radius: 10px; color: var(--accent); font: 600 15px/1 system-ui, -apple-system, sans-serif; text-decoration: none; white-space: nowrap; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
@@ -244,6 +244,7 @@
   #text-output .hljs-emphasis { font-style: italic; } #text-output .hljs-strong { font-weight: 700; }
   /* ---- Read dialog: talk to Claude from the conversation view */
   #composer { flex: none; position: relative; padding: 8px 10px; background: var(--bar); border-top: 1px solid var(--line); }
+  #text-dialog.typing #peek-screen { max-height: calc(var(--vh, 100dvh) * 0.16); } /* the keyboard is up: the heading must keep its room */
   .composer-row { display: flex; align-items: flex-end; gap: 8px; max-width: var(--read-width); margin: 0 auto; }
   #composer-input { flex: 1; min-width: 0; min-height: 44px; max-height: 32vh; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; resize: none; }
   #composer-input:focus { outline: none; border-color: var(--accent); }
@@ -255,7 +256,7 @@
   #text-dialog #peek-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   #composer-error { max-width: var(--read-width); margin: 0 auto 6px; color: var(--danger); font-size: 13px; line-height: 1.4; }
   #peek { max-width: var(--read-width); margin: 0 auto 8px; }
-  #peek-screen { margin: 0; padding: 8px 10px; max-height: 26vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--code, #1c1b1a); color: var(--text); font: 12px/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre; user-select: text; -webkit-user-select: text; }
+  #peek-screen { margin: 0; padding: 8px 10px; max-height: min(26vh, calc(var(--vh, 100dvh) * 0.24)); overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--code, #1c1b1a); color: var(--text); font: 12px/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre; user-select: text; -webkit-user-select: text; }
   #peek-keys { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   #text-dialog #peek-keys button { min-width: 44px; min-height: 40px; padding: 0 12px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   #working { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; max-width: var(--read-width); margin: 0 auto; padding: 0 0 10px; color: var(--muted); font: 13px/1.4 system-ui, -apple-system, sans-serif; }
@@ -266,6 +267,7 @@
   @media (prefers-reduced-motion: reduce) { #working .spin { animation: none; } }
   #text-dialog #working button { flex: none; min-height: 30px; padding: 0 11px; font-size: 13px; }
   #text-dialog #working #working-now { border-color: #4f6b35; color: #9ece6a; }
+  #text-dialog #working #working-screen[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   @media (max-width: 400px) { #working .lead, #working .more { display: none; } }
   #text-dialog #jump-new { position: absolute; right: 12px; bottom: calc(100% + 8px); z-index: 2; min-height: 36px; border-color: var(--accent); background: var(--accent); color: #1f1e1d; box-shadow: 0 4px 16px #0008; }
   .msg.user.pending .bubble { opacity: 0.6; }
@@ -326,6 +328,102 @@
   .compact #cmd-menu .c-info, .compact #cmd-menu .c-chips { grid-column: 1 / -1; }
   .squeezed #keys { display: none; } /* last resort (see layoutTerminal): even the key bar steps aside */
   #cmd-menu .c-info { margin: 6px 8px 3px; color: var(--muted); font: 11px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; user-select: text; -webkit-user-select: text; overflow-wrap: anywhere; }
+
+  /* ---- key bar: a phone gets 8 columns with Enter down the right edge, a desktop one row */
+  #keys.phone { grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 5px; }
+  #keys.phone button.enter { grid-column: 8; grid-row: 1 / span 2; height: auto; background: #1b2a45; }
+  #keys.desktop { grid-template-columns: repeat(15, minmax(0, 1fr)); }
+  #keys.tablet .kmain { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  #keys button.bs { font-size: 1.15rem; }
+  #keys button.ctl { color: #e0af68; }
+  /* Claude's own commands only where Claude runs (never in the scratch terminal), `claude` itself only where it does not */
+  html.mode-shell .claude-only, html.mode-claude .shell-only { display: none !important; }
+  /* ← / → held on a touch screen: move 5, 10 or 20 at once */
+  #arrow-pop { position: absolute; z-index: 14; display: flex; gap: 6px; padding: 6px; border: 1px solid var(--line); border-radius: 14px; background: var(--bar); box-shadow: 0 12px 34px #000c; animation: pop-in 0.14s ease-out; }
+  #arrow-pop[hidden] { display: none; }
+  #arrow-pop button { min-width: 56px; height: 48px; padding: 0 8px; border: 1px solid #4a3d70; border-radius: 11px; background: #2a2342; color: #c9a9ff; font: 700 15px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; touch-action: none; -webkit-tap-highlight-color: transparent; }
+  #arrow-pop button small { margin-left: 2px; font-size: 0.75em; opacity: 0.75; }
+  #arrow-pop button.hot, #arrow-pop button:active { background: #6d58a8; border-color: #9d86e0; color: #fff; }
+  @keyframes pop-in { from { opacity: 0; transform: translateY(6px) scale(0.96); } }
+  .hbtn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); background: #18263f; }
+  @media (max-width: 480px) { #plain { display: none; } } /* the Read view has the same plain text (its page icon) */
+
+  /* ---- scratch terminal: a sheet over the lower part of the terminal (a floating window on a wide screen) */
+  #scratch { position: absolute; left: 0; right: 0; bottom: 0; z-index: 8; display: flex; flex-direction: column; height: 58%; min-height: 200px; background: var(--bar); border-top: 1px solid #2f4a7d; border-radius: 14px 14px 0 0; box-shadow: 0 -14px 44px #000b; overflow: hidden; animation: sheet-up 0.24s cubic-bezier(0.22, 1, 0.36, 1); }
+  @keyframes sheet-up { from { opacity: 0; transform: translateY(24%); } }
+  #scratch.tall, .compact #scratch { height: 100%; min-height: 0; border-radius: 0; }
+  @media (min-width: 900px) {
+    #scratch { left: auto; right: 14px; bottom: 14px; width: min(820px, calc(100% - 28px)); height: min(62%, 560px); border: 1px solid #2f4a7d; border-radius: 14px; }
+    #scratch.tall { top: 14px; height: auto; border-radius: 14px; }
+  }
+  .s-head { flex: none; display: flex; align-items: center; gap: 5px; padding: 6px 6px 6px 10px; border-bottom: 1px solid var(--line); }
+  .s-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--muted); font: 12.5px/1.2 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .s-title svg { flex: none; width: 16px; height: 16px; color: #9ece6a; }
+  .s-title b { flex: none; color: var(--text); font: 650 13px/1 system-ui, -apple-system, sans-serif; }
+  #scratch-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sbtn { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 34px; height: 32px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--key); color: var(--text); font: 600 12.5px/1 system-ui, -apple-system, sans-serif; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  .sbtn svg { width: 16px; height: 16px; flex: none; }
+  .sbtn:active { background: var(--key-on); }
+  .sbtn.danger { color: var(--danger); border-color: #5a303e; }
+  .sbtn.primary { background: var(--accent); border-color: var(--accent); color: #0b0e14; }
+  .sbtn[aria-expanded="true"], .sbtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: #18263f; }
+  @media (max-width: 520px) { .s-head .sbtn span { display: none; } .s-head .sbtn { padding: 0 7px; } }
+  .s-bar { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-bottom: 1px solid var(--line); background: #10141c; animation: pop-in 0.16s ease-out; }
+  #scratch-pastetext { flex: 1; min-width: 0; height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: 16px/1.2 system-ui, -apple-system, sans-serif; }
+  #scratch-pastetext:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px #6ea8ff33; }
+  .s-status { flex: none; margin: 0; padding: 10px 12px; color: var(--muted); font-size: 13px; line-height: 1.4; }
+  .s-status.error { color: var(--danger); }
+  #scratch-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg); }
+
+  /* ---- file manager */
+  #files-dialog { display: flex; flex-direction: column; width: min(660px, calc(100% - 24px)); height: min(80vh, 760px); max-height: calc(100% - 24px); padding: 0; overflow: hidden; }
+  #files-dialog:not([open]) { display: none; }
+  @media (max-width: 600px) { #files-dialog { inset: 0; width: 100%; max-width: 100%; height: 100%; max-height: 100%; margin: 0; border: 0; border-radius: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); } }
+  .f-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
+  .fbtn { flex: none; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--key); color: var(--text); cursor: pointer; touch-action: manipulation; }
+  .fbtn svg { width: 18px; height: 18px; }
+  .fbtn:disabled { opacity: 0.35; cursor: default; }
+  .f-crumbs { flex: 1; min-width: 0; display: flex; align-items: center; overflow-x: auto; scrollbar-width: none; white-space: nowrap; -webkit-mask-image: linear-gradient(90deg, transparent, #000 16px); mask-image: linear-gradient(90deg, transparent, #000 16px); padding-left: 10px; }
+  .f-crumbs::-webkit-scrollbar { display: none; }
+  .f-crumbs button { flex: none; padding: 8px 5px; border: 0; border-radius: 7px; background: none; color: var(--muted); font: 600 13.5px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; cursor: pointer; }
+  .f-crumbs button:hover { color: var(--text); }
+  .f-crumbs button[aria-current] { padding: 8px 8px; color: var(--text); background: var(--key); }
+  .f-crumbs .sep { flex: none; color: #4a5164; font: 13px/1 ui-monospace, monospace; }
+  .f-tools { flex: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); } /* wraps on a phone: nothing hidden past the edge */
+  .f-tools::-webkit-scrollbar { display: none; }
+  .fchip { flex: none; height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--key); color: var(--text); font: 600 12.5px/1 system-ui, -apple-system, sans-serif; white-space: nowrap; cursor: pointer; touch-action: manipulation; }
+  .fchip:active { background: var(--key-on); }
+  .fchip.primary { border-color: var(--accent); color: var(--accent); background: #18263f; }
+  .fchip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  #files-dialog .f-status { flex: none; padding: 8px 14px; font-size: 13px; line-height: 1.4; }
+  #files-dialog .f-status.error { color: var(--danger); }
+  .f-list { flex: 1; min-height: 0; margin: 0; padding: 4px 6px 16px; list-style: none; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .f-row { border-radius: 11px; }
+  .f-row.open { background: #10141c; box-shadow: inset 0 0 0 1px var(--line); }
+  .f-line { display: flex; align-items: center; gap: 2px; }
+  .f-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; min-height: 48px; padding: 6px 8px; border: 0; border-radius: 10px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  .f-open:hover, .f-open:focus-visible { background: var(--key); }
+  .f-icon { flex: none; position: relative; width: 24px; height: 24px; color: var(--muted); }
+  .f-icon svg { width: 24px; height: 24px; }
+  .f-row[data-kind="dir"] .f-icon { color: #7aa2f7; }
+  .f-icon .f-link { position: absolute; right: -3px; bottom: -3px; width: 13px; height: 13px; padding: 1px; border-radius: 50%; background: var(--bar); color: #7dcfff; }
+  .f-row[data-type="link-broken"] .f-icon { color: var(--danger); }
+  .f-text { min-width: 0; display: grid; gap: 3px; }
+  .f-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 14.5px/1.25 system-ui, -apple-system, "PingFang SC", sans-serif; }
+  .f-row.dot .f-name { color: var(--muted); }
+  .f-meta { color: var(--muted); font: 11.5px/1.2 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .f-more { flex: none; display: grid; place-items: center; width: 42px; height: 42px; padding: 0; border: 0; border-radius: 10px; background: none; color: var(--muted); cursor: pointer; touch-action: manipulation; }
+  .f-more svg { width: 18px; height: 18px; }
+  .f-more:hover, .f-row.open .f-more { color: var(--text); background: var(--key); }
+  .f-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 8px 10px 43px; }
+  .f-actions button { height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--text); font: 600 12.5px/1 system-ui, -apple-system, sans-serif; cursor: pointer; touch-action: manipulation; }
+  .f-actions button:active { background: var(--key-on); }
+  .f-actions .danger { color: var(--danger); border-color: #5a303e; }
+  .f-actions .confirm { background: #d9435f; border-color: #d9435f; color: #fff; }
+  .f-actions .warn { width: 100%; margin: 0 0 2px; color: var(--text); font-size: 13px; line-height: 1.4; }
+  .f-icon-edit { margin: 0 9px 0 8px; }
+  .f-rename { flex: 1; min-width: 0; height: 36px; margin: 6px 4px 6px 0; padding: 0 9px; border: 1px solid var(--accent); border-radius: 8px; background: var(--bg); color: var(--text); font: 16px/1.2 system-ui, -apple-system, sans-serif; }
+  .f-empty { padding: 36px 12px; color: var(--muted); font-size: 13px; text-align: center; }
 </style>
 </head>
 <body>
@@ -360,6 +458,14 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7 9l5-5 5 5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
         <span>Upload</span>
       </button>
+      <button class="hbtn" id="files" type="button" title="Files: browse, cd, rename, delete, new folder" aria-label="Files" aria-haspopup="dialog" aria-controls="files-dialog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <span>Files</span>
+      </button>
+      <button class="hbtn" id="scratch-open" type="button" title="Scratch terminal: a throwaway shell here, ended when you close it" aria-label="Scratch terminal" aria-controls="scratch" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="16" rx="3"/><path d="m6.5 9 3 3-3 3M12 15h4"/></svg>
+        <span>Scratch</span>
+      </button>
       <button class="hbtn" id="kb" type="button" aria-label="Show key bar" aria-controls="keys" aria-pressed="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10"/></svg>
         <span>Key bar</span>
@@ -376,10 +482,43 @@
     <iframe id="t" title="Terminal"></iframe>
     <div class="pager" id="pager-left" role="group" aria-label="Page up and down"></div>
     <div class="pager" id="pager-right" role="group" aria-label="Page up and down"></div>
+    <section id="scratch" aria-label="Scratch terminal" hidden>
+      <div class="s-head">
+        <span class="s-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 4 4-4 4M12 17h6"/></svg><b>Scratch</b><span id="scratch-where"></span></span>
+        <button class="sbtn" id="scratch-paste" type="button" title="Paste from the clipboard" aria-label="Paste"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h4"/></svg><span>Paste</span></button>
+        <button class="sbtn" id="scratch-tall" type="button" aria-pressed="false" title="Taller" aria-label="Taller"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5-5 5 5M7 14l5 5 5-5"/></svg></button>
+        <button class="sbtn danger" id="scratch-close" type="button" title="Close: ends this shell" aria-label="Close the scratch terminal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg></button>
+      </div>
+      <form class="s-bar" id="scratch-pastebox" hidden>
+        <input id="scratch-pastetext" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" placeholder="Paste here, then Send" aria-label="Text to paste into the scratch terminal">
+        <button class="sbtn primary" type="submit">Send</button>
+      </form>
+      <p class="s-status" id="scratch-status" role="status" hidden></p>
+      <iframe id="scratch-frame" title="Scratch terminal"></iframe>
+    </section>
   </div>
   <div id="keys"></div>
   <div id="cmd-menu" role="menu" aria-label="Common commands" hidden></div>
+  <div id="arrow-pop" role="menu" aria-label="Move several times" hidden></div>
 </div>
+<dialog id="files-dialog" aria-labelledby="files-heading">
+  <h2 id="files-heading" class="sr-only">Files</h2>
+  <div class="f-head">
+    <button class="fbtn" id="files-up" type="button" aria-label="Parent folder" title="Parent folder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+    <nav class="f-crumbs" id="files-crumbs" aria-label="Folder"></nav>
+    <button class="fbtn" id="files-close" type="button" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg></button>
+  </div>
+  <div class="f-tools" role="toolbar" aria-label="This folder">
+    <button class="fchip primary shell-only" id="files-cd" type="button" title="Type cd into the terminal">cd here</button>
+    <button class="fchip" id="files-insert" type="button" title="Type this folder's path into the terminal">Insert path</button>
+    <button class="fchip" id="files-scratch" type="button" title="Open a scratch terminal in this folder">Scratch here</button>
+    <button class="fchip" id="files-mkdir" type="button">New folder</button>
+    <button class="fchip" id="files-hidden" type="button" aria-pressed="false" title="Show hidden files">.hidden</button>
+    <button class="fchip" id="files-home" type="button" title="Home folder" aria-label="Home folder">~</button>
+  </div>
+  <p class="f-status" id="files-status" role="status" hidden></p>
+  <ul class="f-list" id="files-list"></ul>
+</dialog>
 <dialog id="text-dialog" aria-labelledby="text-heading" aria-describedby="text-instruction">
   <div class="text-heading">
     <a id="text-back" class="text-back" href="./" title="Detach: back to the session list (the session keeps running)" aria-label="Detach and return to the session list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg><span>Detach</span></a>
@@ -468,6 +607,6 @@
     <button id="upload-paste" class="primary" type="button" hidden>Paste</button>
   </div>
 </dialog>
-<script src="term.js?v=20261030-accounts"></script>
+<script src="term.js?v=20261031-scratch"></script>
 </body>
 </html>

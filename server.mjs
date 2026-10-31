@@ -246,8 +246,9 @@ const sharePeople = () => (multiUser() && !personal() ? [...config().users]
 
 // ---- tmux
 const FIELDS = ['session_id', 'pid', 'session_name', 'session_windows', 'session_attached', 'session_activity',
-  'session_created', 'pane_current_command', 'pane_current_path', 'pane_id', '@tmux_web_owner', '@tmux_web_share', 'pane_pid'];
+  'session_created', 'pane_current_command', 'pane_current_path', 'pane_id', '@tmux_web_owner', '@tmux_web_share', 'pane_pid', '@tmux_web_scratch'];
 const FMT = FIELDS.map((f) => `#{${f}}`).join('\t');
+const SCRATCH_FIELD = FIELDS.indexOf('@tmux_web_scratch');
 
 const tmux = (args, maxBuffer = 1 << 20) => new Promise((resolve, reject) => {
   execFile(TMUX, args, { timeout: 3000, maxBuffer }, (err, stdout, stderr) => {
@@ -273,7 +274,7 @@ async function listRows() {
     throw e;
   }
   const home = os.homedir();
-  return out.split('\n').filter(Boolean).map((l) => l.split('\t')).filter((f) => f.length === FIELDS.length)
+  return out.split('\n').filter(Boolean).map((l) => l.split('\t')).filter((f) => f.length === FIELDS.length && f[SCRATCH_FIELD] !== '1') // no scratch terminals
     .map(([id, serverPid, name, windows, attached, activity, created, command, cwd, paneId, owner, share, panePid]) => ({
       id, instance: `${serverPid}:${created}`, name, command,
       windows: +windows, attached: +attached, activity: +activity, created: +created,
@@ -312,6 +313,7 @@ async function listSessions(user, specs, light) {
       share: access === 'full' && multiUser() ? sharedWith(share) : [], // whom it is shared with: for those who may change that
       sharedWithMe: shareOf(share).get(user.email) || null,
       preview: light ? [] : await peek(paneId),
+      claude: CLAUDE_COMMAND.test(row.command), // what counts as Claude (TMUX_WEB_CLAUDE_COMMAND), so pages need not guess
       context: light || !CLAUDE_COMMAND.test(row.command) ? null : await claudeContext(paneId, panePid, cwd),
     };
   }));
@@ -508,6 +510,130 @@ async function changeSession(req, id) {
   }
 }
 
+// ---- scratch terminals: a throwaway shell opened over a session's page. POST /api/scratch { from } | { cwd } -> { id, instance,
+// name, path } makes a tmux session in folder `cwd`, or in the directory of session `from` (when this person may look at it;
+// otherwise the home directory), owned
+// by its maker and marked @tmux_web_scratch: no list shows it, and the page ends it with DELETE /api/sessions/:id when it is
+// closed or left. One that nobody has been attached to for SCRATCH_IDLE seconds (a phone that slept and never came back, a page
+// that could not say goodbye) is ended by the sweep. At most SCRATCH_MAX at a time.
+const SCRATCH_IDLE = +process.env.TMUX_WEB_SCRATCH_IDLE > 0 ? +process.env.TMUX_WEB_SCRATCH_IDLE : 10 * 60;
+const SCRATCH_MAX = 8;
+const scratchSeen = new Map(); // id -> when a client was last seen attached to it
+const scratchRows = async () => {
+  let out;
+  try { out = await tmux(['list-sessions', '-F', '#{session_id}\t#{@tmux_web_scratch}\t#{session_attached}\t#{session_activity}\t#{session_created}']); } catch { return []; }
+  return out.split('\n').map((l) => l.split('\t')).filter((f) => f.length === 5 && f[1] === '1')
+    .map(([id, , attached, activity, created]) => ({ id, attached: +attached, since: Math.max(+activity, +created) }));
+};
+async function createScratch(req, user) {
+  const input = await readMutation(req);
+  if (input.status) return input;
+  const { from, cwd: folder } = input.data;
+  if (from !== undefined && (typeof from !== 'string' || !SESSION_ID.test(from))) return { status: 400, body: { error: 'invalid session id' } };
+  if (folder !== undefined && !absolutePath(folder)) return { status: 400, body: { error: 'invalid folder' } };
+  let cwd = os.homedir();
+  if (folder) {
+    if (!isDir(folder)) return { status: 404, body: { error: 'no such folder' } };
+    cwd = path.resolve(folder);
+  } else if (from) cwd = await sessionDir(user, from) || cwd;
+  if ((await scratchRows()).length >= SCRATCH_MAX) return { status: 429, body: { error: 'too many scratch terminals' } };
+  const name = `scratch-${crypto.randomBytes(4).toString('hex')}`;
+  // one tmux command, so that no list ever sees it unmarked
+  const mark = (option, value) => [';', 'set-option', '-t', `=${name}:`, option, value]; // '=name' alone is no target here
+  const [id, instance] = (await tmux(['new-session', '-d', '-s', name, '-c', cwd, '-P', '-F', '#{session_id}\t#{pid}:#{session_created}',
+    ...mark('@tmux_web_scratch', '1'), ...mark('status', 'off'), ...(multiUser() ? mark('@tmux_web_owner', user.email) : [])])).trim().split('\t'); // no status line: every row counts in a small panel
+  scratchSeen.set(id, Math.floor(Date.now() / 1000));
+  const home = os.homedir();
+  return { status: 201, body: { id, instance, name, path: cwd === home || cwd.startsWith(`${home}/`) ? `~${cwd.slice(home.length)}` : cwd } };
+}
+// a session's working directory, when this person may look at the session (null otherwise)
+async function sessionDir(user, id) {
+  if (await gate(user, id, 'view')) return null;
+  const dir = (await tmux(['display-message', '-p', '-t', id, '#{pane_current_path}']).catch(() => '')).trim();
+  return path.isAbsolute(dir) && isDir(dir) ? dir : null;
+}
+const absolutePath = (v) => typeof v === 'string' && v.length <= 4096 && path.isAbsolute(v) && !v.includes('\0');
+const isDir = (dir) => { try { return fs.statSync(dir).isDirectory(); } catch { return false; } };
+
+// ---- files: a small file manager for the page, working as this account's Unix user (so it can do what a shell here can do).
+// GET /api/files?path=<folder> | ?from=<session id> (that session's directory) | neither (home)
+//   -> { path, parent, home, entries: [{ name, type, size, mtime }], truncated }, folders first. type: dir, file, other, or
+//      link-dir, link-file, link-broken for a symbolic link. Dotfiles are included; the page hides them unless asked.
+// POST /api/files { op: 'mkdir', path, name } | { op: 'rename', path, name, to } | { op: 'delete', path, name } -> { ok: true }
+//   path is the folder, name (and to) one entry in it: no '/', not '.' or '..'. Rename never replaces what is already there
+//   (409); delete removes a folder with everything in it (the page asks first).
+const FILES_MAX = 5000;
+const ENTRY_NAME = (v) => typeof v === 'string' && v.length > 0 && Buffer.byteLength(v) <= 255 && !/[/\0]/.test(v) && v !== '.' && v !== '..';
+const fileError = (e) => ({ ENOENT: [404, 'not found'], EACCES: [403, 'permission denied'], EPERM: [403, 'permission denied'], EEXIST: [409, 'already exists'],
+  ENOTEMPTY: [409, 'not empty'], ENOTDIR: [400, 'not a folder'], EISDIR: [400, 'is a folder'], EXDEV: [400, 'cannot move across file systems'],
+  EBUSY: [409, 'busy'], EROFS: [403, 'read-only file system'] })[e.code];
+async function listFiles(user, query) {
+  const asked = query.get('path');
+  const from = query.get('from');
+  let dir = os.homedir();
+  if (asked != null) {
+    if (!absolutePath(asked)) return { status: 400, body: { error: 'invalid folder' } };
+    dir = path.resolve(asked);
+  } else if (from != null) {
+    if (!SESSION_ID.test(from)) return { status: 400, body: { error: 'invalid session id' } };
+    dir = await sessionDir(user, from) || dir;
+  }
+  let dirents;
+  try { dirents = await fs.promises.readdir(dir, { withFileTypes: true }); } catch (e) {
+    const known = fileError(e);
+    if (known) return { status: known[0], body: { error: known[1], path: dir } };
+    throw e;
+  }
+  const entries = await Promise.all(dirents.slice(0, FILES_MAX).map(async (d) => {
+    const full = path.join(dir, d.name);
+    let st = null;
+    try { st = await fs.promises.lstat(full); } catch { /* gone meanwhile */ }
+    let type = d.isDirectory() ? 'dir' : d.isFile() ? 'file' : 'other';
+    if (d.isSymbolicLink()) {
+      try { type = (await fs.promises.stat(full)).isDirectory() ? 'link-dir' : 'link-file'; } catch { type = 'link-broken'; }
+    }
+    return { name: d.name, type, size: st && type !== 'dir' ? st.size : null, mtime: st ? Math.floor(st.mtimeMs / 1000) : null };
+  }));
+  const folder = (e) => e.type === 'dir' || e.type === 'link-dir';
+  entries.sort((a, b) => (folder(b) - folder(a)) || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+  return { status: 200, body: { path: dir, parent: dir === '/' ? null : path.dirname(dir), home: os.homedir(), entries, truncated: dirents.length > FILES_MAX } };
+}
+async function changeFiles(req) {
+  const input = await readMutation(req, 8192);
+  if (input.status) return input;
+  const { op, path: folder, name, to } = input.data;
+  if (!['mkdir', 'rename', 'delete'].includes(op) || !absolutePath(folder) || !ENTRY_NAME(name) || (op === 'rename' && !ENTRY_NAME(to))) {
+    return { status: 400, body: { error: 'invalid request' } };
+  }
+  const target = path.join(path.resolve(folder), name);
+  try {
+    if (op === 'mkdir') await fs.promises.mkdir(target);
+    else if (op === 'delete') await fs.promises.rm(target, { recursive: true });
+    else {
+      const dest = path.join(path.resolve(folder), to);
+      await fs.promises.lstat(target); // a missing source is 404, not "already exists"
+      try { await fs.promises.lstat(dest); return { status: 409, body: { error: 'already exists' } }; } catch (e) { if (e.code !== 'ENOENT') throw e; }
+      await fs.promises.rename(target, dest);
+    }
+  } catch (e) {
+    const known = fileError(e);
+    if (known) return { status: known[0], body: { error: known[1] } };
+    throw e;
+  }
+  return { status: 200, body: { ok: true } };
+}
+
+async function sweepScratch() {
+  const now = Math.floor(Date.now() / 1000);
+  const rows = await scratchRows();
+  for (const { id, attached, since } of rows) {
+    if (attached > 0) scratchSeen.set(id, now);
+    else if (now - Math.max(since, scratchSeen.get(id) || 0) > SCRATCH_IDLE) await tmux(['kill-session', '-t', id]).catch(() => {});
+  }
+  const alive = new Set(rows.map((r) => r.id));
+  for (const id of scratchSeen.keys()) if (!alive.has(id)) scratchSeen.delete(id);
+}
+
 // PUT /api/sessions/:id/share { instance, share: { "<email>": "view" | "full" } } -> { id, share: [{ email, name, level }] }
 // Replaces whom the session is shared with ({} stops sharing). Only people from sharePeople can be named, never the owner.
 // A person it is shared with sees it in their list (view: read-only; full: as if it were theirs). Needs 'full' access.
@@ -653,9 +779,11 @@ function userItem(raw, rec, ts) {
 
 // One JSONL record -> zero or more items { kind, text, ts, name?, error? }; ts is the record's ISO timestamp or null.
 // kind: user | assistant | tool (name = tool name) | result (error = is_error) | command | notice | summary.
+// Only "user" and "assistant" records are the conversation: Claude Code 2.1 also logs each request it makes as "api-request-blob"
+// records that carry the same messages again (they showed every message twice).
 function classify(rec) {
   const msg = rec?.message;
-  if (!msg || rec.isSidechain || rec.isMeta) return [];
+  if (!msg || rec.isSidechain || rec.isMeta || (rec.type !== 'user' && rec.type !== 'assistant')) return [];
   const ts = typeof rec.timestamp === 'string' ? rec.timestamp : null;
   const blocks = typeof msg.content === 'string' ? [{ type: 'text', text: msg.content }] : Array.isArray(msg.content) ? msg.content : [];
   const out = [];
@@ -1235,6 +1363,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (pathname === '/api/sessions' && req.method === 'POST') return sendJson(res, await createSession(req, user));
     if (pathname === '/api/usage' && req.method === 'GET') return sendJson(res, await usageReport());
+    if (pathname === '/api/scratch' && req.method === 'POST') return sendJson(res, await createScratch(req, user));
+    if (pathname === '/api/files' && req.method === 'GET') return sendJson(res, await listFiles(user, searchParams));
+    if (pathname === '/api/files' && req.method === 'POST') return sendJson(res, await changeFiles(req));
     // every /api/sessions/:id... route: id syntax, method, then what this person may do with that session, and only then the body
     const sub = /^\/api\/sessions\/([^/]+)(?:\/(input|history|transcript|share))?$/.exec(pathname);
     if (sub) {
@@ -1264,7 +1395,7 @@ const server = http.createServer(async (req, res) => {
       if (upload[2]) return sendJson(res, await finishUpload(req, user, upload[1]));
       return sendJson(res, req.method === 'PUT' ? await uploadPiece(req, user, upload[1], searchParams) : cancelUpload(req, user, upload[1]));
     }
-    if (['/api/sessions', '/api/me', '/api/prefs', '/api/accounts', '/api/uploads', '/api/usage', '/verify'].includes(pathname)) return send(res, 405, 'method not allowed');
+    if (['/api/sessions', '/api/me', '/api/prefs', '/api/accounts', '/api/uploads', '/api/usage', '/api/scratch', '/api/files', '/verify'].includes(pathname)) return send(res, 405, 'method not allowed');
     return send(res, 404, 'not found');
   } catch (e) {
     console.error('[tmux-web] handler error:', e.message);
@@ -1276,6 +1407,7 @@ sweepUploads();
 setInterval(sweepUploads, 3600_000).unref();
 setTimeout(pollUsage, 3000).unref();
 setInterval(pollUsage, USAGE_EVERY).unref();
+setInterval(sweepScratch, Math.min(60_000, SCRATCH_IDLE * 500)).unref();
 fs.mkdirSync(path.dirname(SOCK), { recursive: true, mode: 0o700 });
 fs.rmSync(SOCK, { force: true });
 server.listen(SOCK, () => {

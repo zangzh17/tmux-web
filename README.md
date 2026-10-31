@@ -137,6 +137,18 @@ browser ─► Cloudflare Access (login) ─► cloudflared tunnel ─► Caddy 
   `~/.local/state/tmux-web/usage.json`, mode 600, no token in it). It never refreshes the login (that would rotate the refresh
   token under Claude Code): while the token is expired, `error` says so and the last answer stands. A 429 pauses it as long as
   `Retry-After` asks (15 minutes without one).
+* **Scratch** (header) opens a throwaway shell over the lower part of the page (a floating window on a wide screen) in the
+  session's directory: `POST /api/scratch {from}` or `{cwd}` makes a tmux session marked `@tmux_web_scratch` (no status line, in
+  no list, at most 8). While it is open the key bar, the commands menu and Files type into it; it has its own **Paste** (a text
+  box to paste into when the browser will not hand over the clipboard) and a taller/shorter toggle. Closing it, or leaving the
+  page, ends the session; the API ends one nobody has been attached to for 10 minutes (`TMUX_WEB_SCRATCH_IDLE`, seconds).
+  `exit` in it closes the panel.
+* **Files** (header) is a small file manager, working as this account's Unix user, that opens in the session's directory (the
+  scratch terminal's while that is open): a tap opens a folder, the path bar goes back up (or to `/`), ⋯ on an entry offers cd,
+  Scratch here, Insert path, Copy path, Rename and Delete (asks first; a folder goes with everything in it); for the folder shown:
+  **cd here** (shells only), Insert path, Scratch here, New folder, `.hidden`, `~`. `GET /api/files?path=` (or `?from=<session>`)
+  lists a folder, folders first; `POST /api/files {op: mkdir|rename|delete, path, name, to}` changes one entry (a single name,
+  rename never replaces anything).
 * `POST /api/sessions/:id/input` types into the session's Claude pane: `{instance, text}` or `{instance, key}`. It needs the
   same Access token, matching Origin, JSON body and session `instance` as rename/close, and it refuses (409) any pane that is
   not running Claude, so it cannot be used as a general way to type into a shell. `text` is control-character-stripped (so pasted
@@ -308,14 +320,17 @@ running across API restarts; the systemd default would terminate every session i
 
 ## Phone notes
 
-* Key bar (phone): Esc, the commands key (`>_`), Clear (Ctrl+U), ↑ ↓, Tab, ← →, |, /, ~, Enter (last). Up/down and
-  left/right are two colours with Tab between the pairs. Tablet: bigger keys, plus ^C, **Send now** (Claude Code's
+* Key bar (phone, two rows of seven with Enter down the right edge): Esc, the commands key (`>_`), Tab, ^U, ↑ ↓, ⌫ /
+  ^A, ← →, ^E, |, /, ~ (^A start of line, ^E end, ^U clear back to the start). Up/down and left/right are two colours and never
+  one pair right above the other. On a touch screen ← or → held opens a small row of **×5 ×10 ×20** over the key: slide onto
+  one and let go, or let go and tap one. Desktop: the same keys in one row. Tablet: bigger keys, plus ^C, **Send now** (Claude Code's
   Ctrl+X Ctrl+S, `chat:sendNow`: a message queued while Claude works is sent at once, interrupting the turn) and ⇧Tab, with the
   arrows as a cross and Enter in its middle. Page up/down are round bubbles on both edges of the terminal, shown with the key bar.
   The Read view shows **Send now** next to Stop while a message you sent waits for a busy Claude (API key `SendNow`).
   The commands key opens a small menu above the bar: **claude** (types `claude --dangerously-skip-permissions` and Enter),
   **/resume**, **/compact**, **/model**, **/effort**, a row of `/effort max | xhigh | high | medium | low`, **Send now** (typed, then Enter a moment later as a separate keystroke, because Claude Code treats text that
-  arrives together with a newline as a paste) and **Ctrl-C**. With the phone keyboard up the menu is a compact grid of six chips. `claude` is greyed out ("Already running") while Claude is the
+  arrives together with a newline as a paste), **Paste** and **Ctrl-C**. Claude's own commands and Send now only show while
+  Claude runs in the session (the session list's `claude` field), and `claude` only while it does not. With the phone keyboard up the menu is a compact grid of six chips. `claude` is greyed out ("Already running") while Claude is the
   pane's foreground program, since it would be sent to Claude as a message. The menu closes on a tap elsewhere, Esc, or a
   second tap on the key; with a keyboard, arrows/Home/End move and Enter chooses.
   A tap sends its key on release; horizontal swipes scroll the compact bar without sending keys.
@@ -353,7 +368,8 @@ confirmation, and survival of other sessions. `history.test.mjs` and `transcript
 → 404, two Claude panes in one directory each getting their own conversation; `TMUX_WEB_CLAUDE_COMMAND='^sleep$'` lets a `sleep` pane stand in for Claude). `input.test.mjs` drives a fake Claude terminal (bracketed paste on) to check exactly which bytes arrive. `users.test.mjs` covers ownership, the per-user list, the permission matrix on every route, `/verify` for terminals,
 config reloads, and multi-user being off without a users file. `accounts.test.mjs` runs a home and a personal account side by
 side: who may enter which, admins, sharing, `/api/accounts` and the switches, and refusing everything without a valid users file.
-`usage.test.mjs` runs `/api/usage` against a stand-in for Anthropic: the request it makes, the history it keeps, and no login, an
+`scratch.test.mjs` and `files.test.mjs` cover scratch terminals (directory, hidden from lists, close, sweep, the cap) and the
+file API (listing, links, mkdir, rename without replacing, delete, refused names). `usage.test.mjs` runs `/api/usage` against a stand-in for Anthropic: the request it makes, the history it keeps, and no login, an
 expired or refused one, a rate limit and an odd answer. `helpers.mjs` is the shared scaffolding; it points every test at its own
 Claude login file and an unreachable usage URL, so no test reads the real login or asks Anthropic.
 
