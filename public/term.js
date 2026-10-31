@@ -120,7 +120,7 @@
   let scratch = null; // the scratch terminal while one is open: { id, instance, name, path } (see openScratch)
   let sw = null; // its ttyd window, once the terminal is up in it
   // The key bar, the commands menu and the file manager type into the scratch terminal while it is open.
-  const activeTerm = () => (scratch ? sw?.term : w?.term);
+  const activeTerm = () => (scratch && document.getElementById('scratch').open ? sw?.term : w?.term);
   const send = (seq) => { activeTerm()?.input(seq, true); };
   const mainPut = (seq) => { w?.term?.input(seq, true); };
 
@@ -148,7 +148,6 @@
   };
 
   // ---- local clipboard actions; terminal selection is separate from tmux's mouse selection
-  const $copy = document.getElementById('copy');
   const $read = document.getElementById('read');
   const $textDialog = document.getElementById('text-dialog');
   const $textHeading = document.getElementById('text-heading');
@@ -157,8 +156,6 @@
   const $textTop = document.getElementById('text-top');
   const $textOutput = document.getElementById('text-output');
   const $textRender = document.getElementById('text-render');
-  const $textView = document.getElementById('text-view');
-  const $plain = document.getElementById('plain');
   const $textRefresh = document.getElementById('text-refresh');
   const $textStatus = document.getElementById('text-status');
   const $composer = document.getElementById('composer');
@@ -199,7 +196,6 @@
     ? 'Tap Read, then long-press the text to select and copy it.'
     : `Click Read, or hold ${isMac ? 'Option' : 'Shift'} and drag, then press ${isMac ? 'Cmd' : 'Ctrl'}+C or click Copy.`;
   document.getElementById('selection-hint').textContent = selectionHint;
-  $copy.title = `Copy selected text · ${selectionHint}`;
   const selection = () => w?.term?.getSelection() || '';
 
   // ---- reader. The live terminal has no usable scrollback (Claude Code runs on the alternate screen and
@@ -458,7 +454,7 @@
   }
   // Plain-text view: the conversation as one run of raw text (Markdown source as written, no folding, no wrapping added), so
   // selecting and copying gives exactly what is on screen. Tool calls are one line; results only appear when they failed.
-  function rawNodes(frag, items, _start, typed) {
+  function rawNodes(frag, items, _start, typed, withPending = true) {
     const text = (t) => document.createTextNode(t);
     const who = (label, cls = '') => make('span', `raw-who${cls}`, label);
     let claude = false;
@@ -485,6 +481,7 @@
       } else frag.append(make('span', 'raw-meta', `${item.text}\n\n`));
     });
     endTools();
+    if (!withPending) return;
     dropSeenPending();
     for (const entry of pending) {
       const block = make('span', 'raw-pending');
@@ -493,14 +490,8 @@
     }
     if (!items.length && !pending.length) frag.append(text('No messages yet.\n'));
   }
-  // Where the reader stays: `bottom` follows the newest message; `keepTop` is for content appended below (scrollTop unchanged);
-  // by default the distance from the bottom is kept, which is right when earlier messages are inserted above.
-  function layoutChat({ bottom = false, keepTop = false } = {}) {
-    const top = $textScroll.scrollTop;
-    const fromBottom = $textScroll.scrollHeight - top;
-    const opened = new Set([...$textOutput.querySelectorAll('details[open][data-key]')].map((d) => d.dataset.key));
-    const { items, start } = chat;
-    // A typed slash command is logged twice (the typed text, then a command record); show the record once.
+  // A typed slash command is logged twice (the typed text, then a command record); show the record once.
+  function typedOf(items) {
     const typed = new Set();
     items.forEach((item, i) => {
       if (item.kind !== 'user' || !/^\/\S/.test(item.text.trim())) return;
@@ -509,6 +500,22 @@
         if (items[j].kind === 'command' && items[j].text.trim().split(/\s/)[0] === word) { typed.add(i); if (!items[j].ts) items[j].ts = item.ts; break; }
       }
     });
+    return typed;
+  }
+  // The conversation as one run of plain text, as the plain view lays it out (for Copy)
+  function conversationText(items) {
+    const frag = document.createDocumentFragment();
+    rawNodes(frag, items, 0, typedOf(items), false);
+    return frag.textContent;
+  }
+  // Where the reader stays: `bottom` follows the newest message; `keepTop` is for content appended below (scrollTop unchanged);
+  // by default the distance from the bottom is kept, which is right when earlier messages are inserted above.
+  function layoutChat({ bottom = false, keepTop = false } = {}) {
+    const top = $textScroll.scrollTop;
+    const fromBottom = $textScroll.scrollHeight - top;
+    const opened = new Set([...$textOutput.querySelectorAll('details[open][data-key]')].map((d) => d.dataset.key));
+    const { items, start } = chat;
+    const typed = typedOf(items);
     const frag = document.createDocumentFragment();
     (textView ? rawNodes : bubbleNodes)(frag, items, start, typed);
     $textOutput.replaceChildren(frag);
@@ -603,7 +610,6 @@
     mode = kind;
     $textDialog.classList.remove('claude');
     $textHeading.textContent = kind === 'history' ? 'History' : 'Screen';
-    $textView.hidden = true; // already plain text
     $textInstruction.textContent = kind === 'screen' ? `Current screen; the terminal keeps running. ${plainHint}` : plainHint;
     $textInstruction.hidden = false;
     $textRender.hidden = true;
@@ -663,8 +669,6 @@
   function applyChatView() {
     $textHeading.textContent = textView ? 'Plain text' : 'Conversation';
     $textRender.hidden = textView;
-    $textView.hidden = false;
-    $textView.setAttribute('aria-pressed', String(textView));
     $textOutput.className = textView ? 'plain raw' : 'chat';
     $textOutput.style.fontFamily = $textOutput.style.fontSize = '';
   }
@@ -913,13 +917,6 @@
 
   document.getElementById('text-instruction').textContent = plainHint;
   $read.addEventListener('click', () => openReader(false, $read));
-  $plain.addEventListener('click', () => openReader(true, $plain));
-  $textView.addEventListener('click', () => {
-    if (mode !== 'chat') return;
-    textView = !textView;
-    applyChatView();
-    layoutChat({ bottom: true });
-  });
   document.getElementById('text-done').addEventListener('click', () => $textDialog.close());
   // The view itself never scrolls (the conversation and the composer scroll inside it): scrolled, as iOS does to keep a focused
   // box in sight when the composer and the screen panel were taller than what the keyboard left, it hid the heading's buttons
@@ -951,6 +948,8 @@
     $textDialog.classList.remove('claude');
     opener.focus({ preventScroll: true });
     if (!coarse) w?.term?.focus();
+    if ($scratch.open) showSheet($scratch); // what was over the Read view goes back over the terminal
+    if ($copyPanel.open) showSheet($copyPanel);
   });
   $textRefresh.addEventListener('click', async () => {
     if ($textRefresh.disabled) return;
@@ -1040,7 +1039,6 @@
     if (event.target.closest?.('input, textarea, [contenteditable="true"]')) return;
     copyKey(event);
   }, true);
-  $copy.addEventListener('click', () => { void copySelection(); });
   $menuCopy.addEventListener('click', () => { void copySelection(); });
   document.getElementById('menu-select-all').addEventListener('click', () => {
     w?.term?.selectAll();
@@ -1696,8 +1694,9 @@
   let claudeHere = null;
   function applyMode() {
     const root = document.documentElement.classList;
-    root.toggle('mode-claude', !scratch && claudeHere === true);
-    root.toggle('mode-shell', !!scratch || claudeHere === false);
+    const scratchShown = !!scratch && document.getElementById('scratch').open;
+    root.toggle('mode-claude', !scratchShown && claudeHere === true);
+    root.toggle('mode-shell', scratchShown || claudeHere === false);
   }
   setInterval(() => { if (!document.hidden && sessionId && !readOnly) void claudeRunning(); }, 20000);
   function toggleCmdMenu() {
@@ -1722,9 +1721,9 @@
     if (!coarse) cmdRows.find(offered)?.row.focus();
   }
   async function runCommand(c, row) {
-    if (c.notInClaude && !scratch && await claudeRunning()) { row.disabled = true; row.querySelector('.c-hint').textContent = 'Already running'; return; }
+    if (c.notInClaude && !scratchUp() && await claudeRunning()) { row.disabled = true; row.querySelector('.c-hint').textContent = 'Already running'; return; }
     hideCmdMenu();
-    if (c.paste) { void pasteInto(activeTerm(), () => (scratch ? showPasteBox() : clipboardNotice(`Use ${isMac ? 'Cmd' : 'Ctrl'}+V to paste, or allow clipboard access for this site.`, true))); return; }
+    if (c.paste) { void pasteInto(activeTerm(), () => (scratchUp() ? showPasteBox() : clipboardNotice(`Use ${isMac ? 'Cmd' : 'Ctrl'}+V to paste, or allow clipboard access for this site.`, true))); return; }
     send(c.text);
     if (c.enter) setTimeout(() => send('\r'), 150);
     if (!coarse) w?.term?.focus();
@@ -1965,7 +1964,6 @@
     w.term.onCursorMove(() => scheduleCheck(900));
     if (readOnly) w.term.options.disableStdin = true;
     else if (!coarse) w.term.focus();
-    $copy.disabled = false;
 
     // Ctrl/Cmd+C copies a local selection; with no selection, Ctrl+C still reaches the program.
     doc.addEventListener('keydown', copyKey, true);
@@ -2022,31 +2020,122 @@
   }
 
   // ---- scratch terminal: a throwaway shell over the lower part of the page (a floating window on a wide screen), in this
-  // session's directory or a folder picked in Files. The server makes it a hidden tmux session (POST api/scratch). Close ends
-  // it, and so does leaving the page (the server's sweep catches a page that could not say so). While it is open the key bar,
+  // session's directory or a folder picked in Files. The server makes it a hidden tmux session (POST api/scratch). Only Close
+  // ends it: minimised it keeps running (a dot on Scratch says so), and leaving the page leaves it running too; the next page of
+  // this account finds it again (GET api/scratch) and shows it at once if it was up when it was left. While it is up the key bar,
   // the commands menu and Files type into it, and only its shell commands are offered.
   const $scratch = document.getElementById('scratch');
   const $scratchFrame = document.getElementById('scratch-frame');
   const $scratchOpen = document.getElementById('scratch-open');
+  const $textScratch = document.getElementById('text-scratch');
   const $scratchWhere = document.getElementById('scratch-where');
   const $scratchStatus = document.getElementById('scratch-status');
-  const $scratchTall = document.getElementById('scratch-tall');
   const $pasteBox = document.getElementById('scratch-pastebox');
   const $pasteText = document.getElementById('scratch-pastetext');
   let scratchReloads = [];
-  const scratchStatus = (text, error = false) => { $scratchStatus.textContent = text; $scratchStatus.classList.toggle('error', error); $scratchStatus.hidden = !text; };
-  const endScratch = (s, keepalive = false) => fetch(`api/sessions/${encodeURIComponent(s.id)}`, {
-    method: 'DELETE', credentials: 'same-origin', cache: 'no-store', keepalive,
+  let scratchLoaded = false; // its terminal has been asked for in this page
+  let pendingCd = null; // a folder to cd to once its terminal is up
+  const isModal = (dialog) => { try { return dialog.matches(':modal'); } catch { return false; } }; // an older browser without :modal
+  const scratchUp = () => !!scratch && $scratch.open;
+  // a status line in a sheet: the sheet may be above the Read view, where the page's own notices cannot be seen
+  const sheetStatus = (node) => {
+    let timer = null;
+    return (text, kind = '') => {
+      clearTimeout(timer);
+      node.textContent = text;
+      node.classList.toggle('error', kind === 'error');
+      node.classList.toggle('ok', kind === 'ok');
+      node.hidden = !text;
+      if (kind === 'ok') timer = setTimeout(() => { node.hidden = true; }, 2200);
+    };
+  };
+  const scratchStatus = sheetStatus($scratchStatus);
+  // The clipboard from inside a sheet (the textarea fallback goes in the sheet too: the rest of the page may be inert).
+  async function writeClipboard(text, sheet) {
+    try { await navigator.clipboard.writeText(text); return true; } catch {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+      sheet.append(area);
+      area.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch { /* not allowed */ }
+      area.remove();
+      return ok;
+    }
+  }
+  const endScratch = (s) => fetch(`api/sessions/${encodeURIComponent(s.id)}`, {
+    method: 'DELETE', credentials: 'same-origin', cache: 'no-store',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirmed: true, instance: s.instance }),
   }).catch(() => {});
+  // A sheet over the terminal is an ordinary (non-modal) dialog in the page; over a modal (the Read view, or the scratch terminal
+  // above it) only another modal can be on top, so there it is shown as one. Switching hides and shows the same element: a
+  // terminal in it stays connected.
+  function showSheet(sheet) {
+    const over = $textDialog.open || (sheet !== $scratch && isModal($scratch));
+    if (sheet.open && isModal(sheet) === over) return;
+    sheet.dataset.switching = '1';
+    if (sheet.open) sheet.close();
+    if (over) sheet.showModal(); else sheet.show();
+    delete sheet.dataset.switching;
+  }
+  function markScratch() { // the dot: one is running out of sight
+    const away = !!scratch?.id && !$scratch.open;
+    $scratchOpen.classList.toggle('has-scratch', away);
+    $textScratch.classList.toggle('has-scratch', away);
+    $scratchOpen.setAttribute('aria-expanded', String(scratchUp()));
+    $scratchOpen.title = away ? 'Scratch terminal (running, minimised): show it' : 'Scratch terminal: a shell here that keeps running until you close it';
+  }
+  function restoreScratch() {
+    showSheet($scratch);
+    store.set('scratchShown', '1');
+    markScratch();
+    applyMode();
+    if (scratch?.id && !scratchLoaded) {
+      scratchLoaded = true;
+      scratchReloads = [];
+      scratchStatus('Connecting…');
+      $scratchFrame.src = `term/?arg=${encodeURIComponent(scratch.id)}`;
+    }
+  }
+  function minimiseScratch() {
+    if ($scratch.open) $scratch.close();
+    store.set('scratchShown', '0');
+    markScratch();
+    applyMode();
+    if (!coarse) ($textDialog.open ? $composerInput : w?.term)?.focus();
+  }
+  function adoptScratch(found) {
+    scratch = found;
+    scratchLoaded = false;
+    sw = null;
+    $scratchWhere.textContent = $scratchWhere.title = found.path;
+    markScratch();
+  }
+  async function findScratch() {
+    try {
+      const res = await fetch('api/scratch', { credentials: 'same-origin', cache: 'no-store' });
+      return res.ok ? (await res.json()).scratch[0] || null : null;
+    } catch { return null; }
+  }
+  function cdScratch(folder) {
+    if (sw?.term) sw.term.input(`cd ${shellWord(folder)}\r`, true); else pendingCd = folder;
+  }
   async function openScratch(folder = null) {
-    if (scratch && !folder) { $scratch.hidden = false; if (!coarse) sw?.term?.focus(); return; }
-    if (scratch) closeScratch(false);
+    if (scratch?.pending) return;
+    if (!scratch) { const left = await findScratch(); if (left && !scratch) adoptScratch(left); } // one left running: that one
+    if (scratch?.id) {
+      restoreScratch();
+      if (folder) cdScratch(folder);
+      if (!coarse) sw?.term?.focus();
+      return;
+    }
     const mine = { pending: true };
     scratch = mine; // keys typed while it starts go nowhere rather than into the session underneath
-    $scratch.hidden = false;
-    $scratchOpen.setAttribute('aria-expanded', 'true');
     $scratchWhere.textContent = '';
+    showSheet($scratch);
+    markScratch();
     scratchStatus('Starting a shell…');
     hideCmdMenu();
     applyMode();
@@ -2058,33 +2147,35 @@
       if (!res.ok) throw new Error(res.status === 429 ? 'Too many scratch terminals are open on this account. Close one first.' : 'Could not start a scratch terminal. Try again, or reload the page.');
       const made = await res.json();
       if (scratch !== mine) { void endScratch(made); return; } // closed while it was starting
-      scratch = made;
-      scratchReloads = [];
-      $scratchWhere.textContent = made.path;
-      $scratchWhere.title = made.path;
-      $scratchFrame.src = `term/?arg=${encodeURIComponent(made.id)}`;
+      adoptScratch(made);
+      restoreScratch();
     } catch (error) {
       if (scratch !== mine) return;
       scratch = null;
+      markScratch();
       applyMode();
-      scratchStatus(error.message, true);
+      scratchStatus(error.message, 'error');
     }
   }
   function closeScratch(focus = true) {
     const s = scratch;
     scratch = null;
     sw = null;
+    scratchLoaded = false;
+    pendingCd = null;
     $scratchFrame.src = 'about:blank';
-    $scratch.hidden = true;
+    if ($scratch.open) $scratch.close();
     $scratch.classList.remove('tall');
-    $scratchTall.setAttribute('aria-pressed', 'false');
+    document.getElementById('scratch-tall').setAttribute('aria-pressed', 'false');
     $pasteBox.hidden = true;
     scratchStatus('');
-    $scratchOpen.setAttribute('aria-expanded', 'false');
+    store.set('scratchShown', '0');
+    markScratch();
     applyMode();
     if (s?.id) void endScratch(s);
-    if (focus && !coarse) w?.term?.focus();
+    if (focus && !coarse) ($textDialog.open ? $composerInput : w?.term)?.focus();
   }
+  $scratch.addEventListener('cancel', (e) => e.preventDefault()); // Esc belongs to the shell; minimise or close it with its buttons
   $scratchFrame.addEventListener('load', () => {
     const mine = scratch;
     const win = $scratchFrame.contentWindow;
@@ -2093,7 +2184,7 @@
     const timer = setInterval(() => {
       if (scratch !== mine) { clearInterval(timer); return; }
       if (win.term?.options) { clearInterval(timer); setupScratch(win); }
-      else if (Date.now() - t0 > 15000) { clearInterval(timer); scratchStatus('The terminal did not start. Close it and try again.', true); }
+      else if (Date.now() - t0 > 15000) { clearInterval(timer); scratchStatus('The terminal did not start. Close it and try again.', 'error'); }
     }, 100);
   });
   function setupScratch(win) {
@@ -2115,12 +2206,13 @@
       if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'c' || !term.getSelection()) return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      void copyText(term.getSelection());
+      void writeClipboard(term.getSelection(), $scratch).then((ok) => scratchStatus(ok ? 'Copied' : 'The browser did not allow copying.', ok ? 'ok' : 'error'));
     }, true);
     doc.addEventListener('pointerdown', () => { hideCmdMenu(); closeArrowPop(); }, true);
     scratchStatus('');
     setTimeout(() => term.fit(), 60);
-    if (!coarse) term.focus();
+    if (pendingCd) { cdScratch(pendingCd); pendingCd = null; }
+    if (!coarse && $scratch.open) term.focus();
   }
   // `exit` (or a dropped connection, a phone that slept): ttyd offers to reconnect. Gone: close the panel; still there: load again.
   async function scratchCheck() {
@@ -2132,29 +2224,33 @@
     if (gone) { closeScratch(); return; }
     const now = Date.now();
     scratchReloads = scratchReloads.filter((t) => now - t < 60000);
-    if (scratchReloads.length >= 3) { scratchStatus('The scratch terminal keeps disconnecting. Close it and open a new one.', true); return; }
+    if (scratchReloads.length >= 3) { scratchStatus('The scratch terminal keeps disconnecting. Close it and open a new one.', 'error'); return; }
     scratchReloads.push(now);
     sw = null;
     $scratchFrame.src = `term/?arg=${encodeURIComponent(mine.id)}`;
   }
   setInterval(() => { void scratchCheck(); }, 2000);
   document.addEventListener('visibilitychange', () => { void scratchCheck(); });
-  addEventListener('pagehide', () => { if (scratch?.id) { void endScratch(scratch, true); scratch = null; } });
   function showPasteBox() {
     $pasteBox.hidden = false;
     $pasteText.value = '';
     $pasteText.focus();
   }
-  $scratchOpen.addEventListener('click', () => { if (scratch && !$scratch.hidden) closeScratch(); else void openScratch(); });
+  function tallToggle(sheet, button) {
+    button.addEventListener('click', () => {
+      const on = !sheet.classList.contains('tall');
+      sheet.classList.toggle('tall', on);
+      button.setAttribute('aria-pressed', String(on));
+      button.title = on ? 'Shorter' : 'Taller';
+      button.setAttribute('aria-label', button.title);
+    });
+  }
+  $scratchOpen.addEventListener('click', () => { if (scratchUp()) minimiseScratch(); else void openScratch(); });
+  $textScratch.addEventListener('click', () => { void openScratch(); });
+  document.getElementById('scratch-min').addEventListener('click', minimiseScratch);
   document.getElementById('scratch-close').addEventListener('click', () => closeScratch());
   document.getElementById('scratch-paste').addEventListener('click', () => { void pasteInto(sw?.term, showPasteBox); });
-  $scratchTall.addEventListener('click', () => {
-    const on = !$scratch.classList.contains('tall');
-    $scratch.classList.toggle('tall', on);
-    $scratchTall.setAttribute('aria-pressed', String(on));
-    $scratchTall.title = on ? 'Shorter' : 'Taller';
-    $scratchTall.setAttribute('aria-label', $scratchTall.title);
-  });
+  tallToggle($scratch, document.getElementById('scratch-tall'));
   $pasteBox.addEventListener('submit', (e) => {
     e.preventDefault();
     if ($pasteText.value) sw?.term?.paste($pasteText.value);
@@ -2163,8 +2259,96 @@
     if (!coarse) sw?.term?.focus();
   });
   $pasteText.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); $pasteBox.hidden = true; } });
+  // Copy in the scratch terminal: its selection when there is one (a mouse drag), otherwise its output in the Copy sheet
+  document.getElementById('scratch-copy').addEventListener('click', async () => {
+    const selected = sw?.term?.getSelection();
+    if (selected) { const ok = await writeClipboard(selected, $scratch); scratchStatus(ok ? 'Copied' : 'The browser did not allow copying.', ok ? 'ok' : 'error'); return; }
+    void openCopy('scratch');
+  });
   // Taps on the panel's buttons must not take the focus (and the phone keyboard) from its terminal.
   for (const id of ['scratch-paste', 'scratch-tall']) keepFocus(document.getElementById(id));
+
+  // ---- Copy: an editable copy of the text in a sheet like the scratch terminal's (over the Read view or the scratch terminal
+  // when they are up). Edit it as you like; nothing typed there reaches a terminal, and the key bar is off while it is open. The
+  // text comes from the terminal (tmux's scrollback; a Claude session's is just its screen), from Claude's conversation (as plain
+  // text, the newest 500 entries) or from the scratch terminal.
+  const $copyPanel = document.getElementById('copy-panel');
+  const $copyText = document.getElementById('copy-text');
+  const $copyWhat = document.getElementById('copy-what');
+  const $copySources = document.getElementById('copy-sources');
+  const $copyOpen = document.getElementById('copy-open');
+  const $copyWrap = document.getElementById('copy-wrap');
+  const copyStatus = sheetStatus(document.getElementById('copy-status'));
+  let copySource = null;
+  let copyGen = 0;
+  const copyOffered = () => ({ conversation: !!sessionId && claudeHere !== false, terminal: !!sessionId, scratch: !!scratch?.id });
+  const setWrap = (on) => {
+    $copyText.wrap = on ? 'soft' : 'off';
+    $copyWrap.setAttribute('aria-pressed', String(on));
+    store.set('copyWrap', on ? '1' : '0');
+  };
+  setWrap(store.get('copyWrap') !== '0');
+  async function openCopy(source) {
+    hideCmdMenu();
+    closeArrowPop();
+    showSheet($copyPanel);
+    $copyOpen.setAttribute('aria-expanded', 'true');
+    document.getElementById('app').classList.add('copying');
+    await loadCopy(source);
+  }
+  async function loadCopy(source) {
+    const offered = copyOffered();
+    if (!offered[source]) source = offered.conversation ? 'conversation' : 'terminal';
+    copySource = source;
+    const gen = ++copyGen;
+    for (const b of $copySources.querySelectorAll('.seg')) {
+      b.hidden = !offered[b.dataset.src];
+      b.setAttribute('aria-pressed', String(b.dataset.src === source));
+    }
+    $copySources.hidden = Object.values(offered).filter(Boolean).length < 2;
+    $copyWhat.textContent = source === 'scratch' ? `scratch · ${scratch.path}` : source === 'conversation' ? `${name} · conversation` : `${name} · terminal`;
+    $copyText.value = '';
+    copyStatus('Loading…');
+    let text;
+    try {
+      if (source === 'conversation') text = conversationText((await getJson('transcript?count=500')).items);
+      else {
+        const res = await fetch(`api/sessions/${encodeURIComponent(source === 'scratch' ? scratch.id : sessionId)}/history?lines=5000`, { credentials: 'same-origin', cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        text = (await res.json()).text;
+      }
+    } catch { if (gen === copyGen) copyStatus('Could not load the text. Try Reload.', 'error'); return; }
+    if (gen !== copyGen || !$copyPanel.open) return;
+    $copyText.value = text.replace(/\s+$/, '');
+    copyStatus('');
+    $copyText.scrollTop = $copyText.scrollHeight;
+  }
+  const closeCopy = () => { if ($copyPanel.open) $copyPanel.close(); };
+  $copyPanel.addEventListener('close', () => {
+    if ($copyPanel.dataset.switching) return; // shown again as (non-)modal: still open
+    copyGen++;
+    $copyText.value = '';
+    $copyOpen.setAttribute('aria-expanded', 'false');
+    document.getElementById('app').classList.remove('copying');
+    if (!coarse && !$textDialog.open) activeTerm()?.focus();
+  });
+  $copyPanel.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !isModal($copyPanel)) { e.preventDefault(); closeCopy(); } });
+  $copyOpen.addEventListener('click', () => { if ($copyPanel.open) closeCopy(); else void openCopy(claudeHere ? 'conversation' : 'terminal'); });
+  document.getElementById('text-copy').addEventListener('click', () => { void openCopy('conversation'); });
+  document.getElementById('copy-close').addEventListener('click', closeCopy);
+  document.getElementById('copy-reload').addEventListener('click', () => { void loadCopy(copySource); });
+  $copyWrap.addEventListener('click', () => setWrap($copyText.wrap === 'off'));
+  tallToggle($copyPanel, document.getElementById('copy-tall'));
+  $copySources.addEventListener('click', (e) => { const b = e.target.closest('.seg'); if (b && b.dataset.src !== copySource) void loadCopy(b.dataset.src); });
+  async function copyOut(text) {
+    if (!text) { copyStatus('Select some text first.', 'error'); return; }
+    const ok = await writeClipboard(text, $copyPanel);
+    copyStatus(ok ? `Copied ${text.length > 60 ? `${text.split('\n').length} lines` : `“${text.trim()}”`}` : 'The browser did not allow copying. Use the system Copy on the selection.', ok ? 'ok' : 'error');
+  }
+  document.getElementById('copy-all').addEventListener('click', () => { void copyOut($copyText.value); });
+  document.getElementById('copy-selection').addEventListener('click', () => { void copyOut($copyText.value.slice($copyText.selectionStart, $copyText.selectionEnd)); });
+  // the buttons must not take the focus from the text (its selection, and the phone keyboard if it is up)
+  for (const id of ['copy-all', 'copy-selection', 'copy-wrap']) document.getElementById(id).addEventListener('pointerdown', (e) => e.preventDefault());
 
   // ---- files: a pop-up file manager (api/files) that opens in this session's directory (the scratch terminal's while that is
   // open). A tap opens a folder; ⋯, or a tap on a file, shows what can be done with an entry. For the folder shown: cd here
@@ -2354,11 +2538,25 @@
     $filesList.scrollTop = 0;
     input.focus();
   }
+  const toComposer = () => $textDialog.open && mode === 'chat' && !$composerInput.disabled && !readOnly && !isModal($scratch);
   function afterFiles() { $files.close(); if (!coarse) activeTerm()?.focus(); }
   function typeCd(dir) { send(`cd ${shellWord(dir)}`); setTimeout(() => send('\r'), 120); afterFiles(); }
-  function insertPath(full) { send(`${shellWord(full)} `); afterFiles(); }
+  function insertPath(full) {
+    if (!toComposer()) { send(`${shellWord(full)} `); afterFiles(); return; }
+    // the Read view: into the message box, where the cursor is
+    const box = $composerInput;
+    const at = box.selectionStart ?? box.value.length;
+    const before = box.value.slice(0, at);
+    const text = `${before && !/\s$/.test(before) ? ' ' : ''}${shellWord(full)} `;
+    box.value = before + text + box.value.slice(box.selectionEnd ?? at);
+    autoGrow();
+    syncSend();
+    $files.close();
+    box.focus();
+    box.setSelectionRange(at + text.length, at + text.length);
+  }
   function scratchIn(dir) { $files.close(); void openScratch(dir); }
-  document.getElementById('files').addEventListener('click', () => {
+  function openFiles() {
     if ($files.open) return;
     hideMenu();
     hideCmdMenu();
@@ -2368,8 +2566,10 @@
     $filesCrumbs.replaceChildren();
     folder = null;
     $files.showModal();
-    void filesGo(scratch?.id ? { from: scratch.id } : sessionId ? { from: sessionId } : {});
-  });
+    void filesGo(scratchUp() && scratch.id ? { from: scratch.id } : sessionId ? { from: sessionId } : {});
+  }
+  document.getElementById('files').addEventListener('click', openFiles);
+  document.getElementById('text-files').addEventListener('click', openFiles);
   document.getElementById('files-close').addEventListener('click', () => $files.close());
   $filesUp.addEventListener('click', () => { if (folder?.parent) void filesGo({ path: folder.parent }); });
   document.getElementById('files-home').addEventListener('click', () => { if (folder?.home) void filesGo({ path: folder.home }); });
@@ -2383,7 +2583,7 @@
     $filesHidden.setAttribute('aria-pressed', String(showDot));
     if (folder) renderFiles(true);
   });
-  $files.addEventListener('close', () => { if (!coarse) activeTerm()?.focus(); });
+  $files.addEventListener('close', () => { if (!coarse && !$textDialog.open) activeTerm()?.focus(); });
 
   // ---- reconnect without asking
   // ttyd reconnects by itself only after a close it takes for a hiccup. Any socket error (what iOS reports for a socket it
@@ -2458,7 +2658,7 @@
       // their window or type into it. "Take control" reloads with ?control=1; "View only" goes back.
       const control = params.get('control') === '1';
       readOnly = session.access === 'view' || (session.foreign && !control);
-      $title.disabled = $close.disabled = $read.disabled = $plain.disabled = false;
+      $title.disabled = $close.disabled = $read.disabled = false;
       const whose = session.owner ? `${session.owner.name}'s session` : `a session of the ${account || 'other'} account`;
       const reopen = (on) => () => {
         const url = new URL(location.href);
@@ -2481,12 +2681,14 @@
       frame.src = `term/?arg=${encodeURIComponent(sessionId)}${readOnly ? '&arg=ro' : ''}`;
       // If Claude is what runs in it, open the way the last session was left on this kind of device: in the Read view (the
       // rendered conversation, also the default), as plain text, or (after Done) in the terminal.
+      // a scratch terminal left running (minimised here or on another page): the dot on Scratch, and back up if it was up when left
+      if (!readOnly) void findScratch().then((left) => { if (left && !scratch) { adoptScratch(left); if (store.get('scratchShown') === '1') restoreScratch(); } });
       claudeHere = await isClaudePane(session);
       applyMode();
       if (claudeHere) {
         await Promise.race([prefs.ready, new Promise((resolve) => setTimeout(resolve, 1500))]);
         const view = prefs.get('view');
-        if (view !== 'term') openReader(view === 'text', view === 'text' ? $plain : $read);
+        if (view !== 'term') openReader(false, $read); // 'text' from before Copy replaced the plain-text view: Read
       }
     } catch (error) {
       showNotice(error.message, true);

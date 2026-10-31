@@ -513,10 +513,11 @@ async function changeSession(req, id) {
 // ---- scratch terminals: a throwaway shell opened over a session's page. POST /api/scratch { from } | { cwd } -> { id, instance,
 // name, path } makes a tmux session in folder `cwd`, or in the directory of session `from` (when this person may look at it;
 // otherwise the home directory), owned
-// by its maker and marked @tmux_web_scratch: no list shows it, and the page ends it with DELETE /api/sessions/:id when it is
-// closed or left. One that nobody has been attached to for SCRATCH_IDLE seconds (a phone that slept and never came back, a page
-// that could not say goodbye) is ended by the sweep. At most SCRATCH_MAX at a time.
-const SCRATCH_IDLE = +process.env.TMUX_WEB_SCRATCH_IDLE > 0 ? +process.env.TMUX_WEB_SCRATCH_IDLE : 10 * 60;
+// by its maker and marked @tmux_web_scratch: no session list shows it. It lives until its Close (DELETE /api/sessions/:id):
+// minimised, or with every page left, it keeps running, and GET /api/scratch -> { scratch: [{ id, instance, name, path, attached,
+// activity }] } (one's own, the most recently used first) lets a page find it again. One that has had neither a client nor any
+// output for SCRATCH_IDLE seconds (a day) is ended by the sweep. At most SCRATCH_MAX at a time.
+const SCRATCH_IDLE = +process.env.TMUX_WEB_SCRATCH_IDLE > 0 ? +process.env.TMUX_WEB_SCRATCH_IDLE : 24 * 3600;
 const SCRATCH_MAX = 8;
 const scratchSeen = new Map(); // id -> when a client was last seen attached to it
 const scratchRows = async () => {
@@ -623,6 +624,16 @@ async function changeFiles(req) {
   return { status: 200, body: { ok: true } };
 }
 
+async function listScratch(user) {
+  let out;
+  try { out = await tmux(['list-sessions', '-F', '#{session_id}\t#{@tmux_web_scratch}\t#{pid}:#{session_created}\t#{session_name}\t#{pane_current_path}\t#{session_attached}\t#{session_activity}\t#{@tmux_web_owner}']); } catch { out = ''; }
+  const home = os.homedir();
+  const scratch = out.split('\n').map((l) => l.split('\t')).filter((f) => f.length === 8 && f[1] === '1' && accessFor(user, f[7].trim().toLowerCase()) === 'full'
+    && (!multiUser() || f[7].trim().toLowerCase() === user.email)) // one's own, even for those who could see others'
+    .map(([id, , instance, name, cwd, attached, activity]) => ({ id, instance, name, path: cwd === home || cwd.startsWith(`${home}/`) ? `~${cwd.slice(home.length)}` : cwd, attached: +attached, activity: +activity }))
+    .sort((a, b) => b.activity - a.activity);
+  return { status: 200, body: { scratch } };
+}
 async function sweepScratch() {
   const now = Math.floor(Date.now() / 1000);
   const rows = await scratchRows();
@@ -1364,6 +1375,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/sessions' && req.method === 'POST') return sendJson(res, await createSession(req, user));
     if (pathname === '/api/usage' && req.method === 'GET') return sendJson(res, await usageReport());
     if (pathname === '/api/scratch' && req.method === 'POST') return sendJson(res, await createScratch(req, user));
+    if (pathname === '/api/scratch' && req.method === 'GET') return sendJson(res, await listScratch(user));
     if (pathname === '/api/files' && req.method === 'GET') return sendJson(res, await listFiles(user, searchParams));
     if (pathname === '/api/files' && req.method === 'POST') return sendJson(res, await changeFiles(req));
     // every /api/sessions/:id... route: id syntax, method, then what this person may do with that session, and only then the body

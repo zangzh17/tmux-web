@@ -6,13 +6,13 @@ Returning to the list removes the terminal iframe and detaches that browser clie
 disconnects it (the ttyd ping handles abrupt network loss). The tmux session keeps running.
 Inside a session, tap its title to edit the name; Enter or blur saves automatically, and Escape cancels.
 **Read** (book icon) opens a read-only reading view with native scrolling, wrapping and text selection; the live terminal
-keeps running underneath. **Plain text** (document icon, next to it) opens the same view as raw text (below). On a phone the
-header buttons are icons only and always stay on one row; the toolbar of the view is icons too: Render (eye), Plain text,
-Refresh, Done (✕). It exists because the live terminal has no usable history for Claude Code (it runs on tmux's
+keeps running underneath. **Copy** (next to it) opens an editable copy of the text instead (below). On a phone the
+header buttons are icons only and always stay on one row; the toolbar of the view is icons too: Files, Scratch, Render (eye),
+Copy, Aa, Refresh, and **Done** (a word, so it is not taken for the session's Close). It exists because the live terminal has no usable history for Claude Code (it runs on tmux's
 alternate screen, so `history_size` is 0, and it draws at the width it had when it printed).
 
 **Opening a session that runs Claude starts in this view**, with Render on: the page checks the foreground command (and, failing
-that, whether the pane has a transcript) every time it is opened, and opens the conversation by itself. ✕ (Done) returns to the
+that, whether the pane has a transcript) every time it is opened, and opens the conversation by itself. **Done** returns to the
 terminal and it stays there until the page is opened again; a plain shell opens in the terminal as before.
 
 * In a pane running Claude Code (`pane_current_command` matches `TMUX_WEB_CLAUDE_COMMAND`) it shows the **conversation**,
@@ -27,12 +27,13 @@ terminal and it stays there until the page is opened again; a plain shell opens 
   the command and a folded result). Slash commands, `/compact` summaries and interruptions get their own small markers.
   It opens at the newest message; scroll up to load earlier ones (150 at a time), tap **Refresh** for new ones.
   **Render** is on every time Read opens; the eye button switches Markdown/math/highlighting off for the view that is open.
-* **Plain text** shows the same conversation as one run of raw text in a monospace font: your messages and Claude's replies
-  exactly as written (Markdown source, one line per paragraph, so nothing is hard-wrapped at the terminal's width), speaker
-  lines `You · 14:02` / `Claude`, tool calls as one `[Bash] command` line each, failed tool results as `✗ first line`
-  (successful tool output is left out; use Read for it), slash commands, `/compact` summaries and interruptions. Selecting
-  everything copies exactly what is on screen. It opens at the newest message and scrolling up loads earlier ones
-  automatically (150 at a time), like Read. The toolbar's document icon switches between the two views without closing.
+* **Copy** (on the terminal page's header, in the Read view's toolbar, and in the scratch terminal) opens a sheet like the
+  scratch terminal's with an editable text box: change, cut and select freely, then **Copy selection** or **Copy all**; nothing
+  typed there reaches a terminal, and the key bar is off while it is open. The text comes from the **Terminal** (tmux's scrollback,
+  up to 5000 lines; a Claude session's is just its screen), the **Conversation** (Claude's, as plain text: your messages and
+  Claude's replies exactly as written, speaker lines `You · 14:02` / `Claude`, tool calls as one `[Bash] command` line each,
+  failed tool results as `✗ first line`, the newest 500 entries) or the **Scratch** terminal; it opens on the conversation in a
+  Claude session and in the Read view. Wrap (long lines), Reload (the text again, edits gone), taller/shorter.
   In a pane that is not Claude it shows the tmux scrollback, as Read does.
 * **You can answer from here.** In a Claude conversation a message box sits under the text. On a computer Enter sends and
   Shift+Enter starts a new line; on a phone Enter is a new line and **Send** sends. Your message shows dimmed
@@ -51,9 +52,9 @@ terminal and it stays there until the page is opened again; a plain shell opens 
 * Copying is native: long-press text on a phone, adjust the handles and choose Copy; drag and Ctrl/Cmd+C on a computer.
   There are no Copy buttons under the text. Code blocks have their own **Copy** button. Loading and error messages show in
   a thin line under the heading only while there is something to say.
-  The keyboard stays hidden in this view. Tap ✕ to return, then tap the terminal when you want to type.
+  The keyboard stays hidden in this view. Tap **Done** to return, then tap the terminal when you want to type.
 On desktop, hold **Shift** while dragging to select terminal text (**Option** on Mac), then
-use **Ctrl/Cmd+C** or the toolbar's **Copy** button. With no text selected, Ctrl+C still interrupts
+use **Ctrl/Cmd+C** (or the editable **Copy** sheet). With no text selected, Ctrl+C still interrupts
 the running program. Right-click opens one local **Copy / Paste / Select all** menu; it does not
 also open a tmux menu. Clipboard buttons use the browser clipboard, with a native-copy fallback.
 Above the session list, **− n +** sets how many preview lines each card shows (0, 1, 2, 3, 5, 7, 10, 15, 20, 30 or 50; the middle
@@ -140,9 +141,12 @@ browser ─► Cloudflare Access (login) ─► cloudflared tunnel ─► Caddy 
 * **Scratch** (header) opens a throwaway shell over the lower part of the page (a floating window on a wide screen) in the
   session's directory: `POST /api/scratch {from}` or `{cwd}` makes a tmux session marked `@tmux_web_scratch` (no status line, in
   no list, at most 8). While it is open the key bar, the commands menu and Files type into it; it has its own **Paste** (a text
-  box to paste into when the browser will not hand over the clipboard) and a taller/shorter toggle. Closing it, or leaving the
-  page, ends the session; the API ends one nobody has been attached to for 10 minutes (`TMUX_WEB_SCRATCH_IDLE`, seconds).
-  `exit` in it closes the panel.
+  box to paste into when the browser will not hand over the clipboard), **Copy** (its selection, or its output in the Copy sheet),
+  taller/shorter, **minimise** (hidden, still running: a dot on Scratch, which brings it back) and **Close**, the only thing that
+  ends it. Leaving the page leaves it running too: the next session page of this account finds it (`GET /api/scratch`, one's own,
+  the most recently used first) and shows it again if it was up when left. Above the Read view it is shown as a modal of its own.
+  The API ends one that has had neither a client nor any output for a day (`TMUX_WEB_SCRATCH_IDLE`, seconds). `exit` in it
+  closes the panel.
 * **Files** (header) is a small file manager, working as this account's Unix user, that opens in the session's directory (the
   scratch terminal's while that is open): a tap opens a folder, the path bar goes back up (or to `/`), ⋯ on an entry offers cd,
   Scratch here, Insert path, Copy path, Rename and Delete (asks first; a folder goes with everything in it); for the folder shown:

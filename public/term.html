@@ -141,6 +141,9 @@
   #text-dialog .text-tools button { min-width: 40px; min-height: 34px; padding: 0; }
   .text-tools svg { width: 19px; height: 19px; }
   #text-dialog #text-render[aria-pressed="true"], #text-dialog #text-view[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  /* the way back to the terminal: a word, not a ✕ (that is the session's Close on the terminal page), set apart from the toggles */
+  #text-dialog .text-tools #text-done { margin-left: 4px; padding: 0 12px; border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); color: var(--accent); font-weight: 650; }
+  @media (max-width: 480px) { #text-dialog .text-tools { gap: 4px; } #text-dialog .text-tools button { min-width: 37px; } #text-dialog .text-tools #text-done { margin-left: 2px; padding: 0 10px; } }
   #text-dialog button { min-height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--key); color: var(--text); font: 600 14px/1 system-ui, sans-serif; cursor: pointer; touch-action: manipulation; }
   #text-instruction { flex: none; padding: 8px 12px; font-size: 13px; line-height: 1.4; }
   #text-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 8px 12px; -webkit-overflow-scrolling: touch; }
@@ -166,6 +169,7 @@
   #text-dialog #text-fmt-panel button { min-width: 38px; min-height: 32px; padding: 0 9px; font-size: 13px; }
   #text-dialog #text-fmt-panel button[aria-pressed="true"], #text-dialog #text-fmt[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   @media (max-width: 380px) { #text-dialog .text-tools { gap: 4px; } #text-dialog .text-tools button { min-width: 35px; } }
+  @media (max-width: 480px) { .text-back span { display: none; } .text-back { padding: 0 6px 0 2px; } }
   #text-scale-range { width: min(240px, 46vw); accent-color: var(--accent); }
   #text-scale { min-width: 3.2em; color: var(--text); font: 600 13px/1 system-ui, sans-serif; text-align: center; font-variant-numeric: tabular-nums; }
   #text-output.raw { max-width: calc(var(--read-width) / var(--read-scale)); margin: 0 auto; padding: 2px 0 14px; font: 13.5px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, "PingFang SC", monospace; }
@@ -201,7 +205,6 @@
   .steps > summary::before, .res > summary::before { content: '›'; flex: none; display: inline-block; width: 0.7em; font-size: 1.3em; line-height: 1; text-align: center; transition: transform 0.15s; }
   .steps[open] > summary::before, .res[open] > summary::before { transform: rotate(90deg); }
   .steps.err > summary, .res.err > summary { color: var(--danger); }
-  .s-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .step { padding: 8px 12px 10px; border-top: 1px solid var(--line); }
   .tool-name { display: inline-block; margin-bottom: 5px; padding: 0 7px; border-radius: 6px; background: #3b2e28; color: var(--code-inline); font: 600 11.5px/1.7 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   .res { margin-top: 6px; }
@@ -346,15 +349,21 @@
   #arrow-pop button.hot, #arrow-pop button:active { background: #6d58a8; border-color: #9d86e0; color: #fff; }
   @keyframes pop-in { from { opacity: 0; transform: translateY(6px) scale(0.96); } }
   .hbtn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); background: #18263f; }
-  @media (max-width: 480px) { #plain { display: none; } } /* the Read view has the same plain text (its page icon) */
 
-  /* ---- scratch terminal: a sheet over the lower part of the terminal (a floating window on a wide screen) */
-  #scratch { position: absolute; left: 0; right: 0; bottom: 0; z-index: 8; display: flex; flex-direction: column; height: 58%; min-height: 200px; background: var(--bar); border-top: 1px solid #2f4a7d; border-radius: 14px 14px 0 0; box-shadow: 0 -14px 44px #000b; overflow: hidden; animation: sheet-up 0.24s cubic-bezier(0.22, 1, 0.36, 1); }
+  /* ---- sheets (the scratch terminal, the copy panel): over the lower part of the terminal (a floating window on a wide screen) */
+  .sheet { position: absolute; inset: auto 0 0 0; z-index: 8; display: flex; flex-direction: column; width: auto; max-width: none; height: 58%; min-height: 200px; max-height: none; margin: 0; padding: 0; border: 0; border-top: 1px solid #2f4a7d; border-radius: 14px 14px 0 0; background: var(--bar); color: var(--text); box-shadow: 0 -14px 44px #000b; overflow: hidden; animation: sheet-up 0.24s cubic-bezier(0.22, 1, 0.36, 1); }
+  .sheet:not([open]) { display: none; }
+  /* over the Read view it is a modal of its own (the only way above another modal): the same sheet, on the whole screen */
+  .sheet:modal { position: fixed; top: auto; height: calc(var(--vh, 100dvh) * 0.6); padding-bottom: env(safe-area-inset-bottom); }
+  .sheet::backdrop { background: #0007; }
   @keyframes sheet-up { from { opacity: 0; transform: translateY(24%); } }
-  #scratch.tall, .compact #scratch { height: 100%; min-height: 0; border-radius: 0; }
+  .sheet.tall, .compact .sheet { height: 100%; min-height: 0; border-radius: 0; }
+  .sheet:modal.tall { top: var(--vt, 0px); height: var(--vh, 100dvh); padding-top: env(safe-area-inset-top); }
   @media (min-width: 900px) {
-    #scratch { left: auto; right: 14px; bottom: 14px; width: min(820px, calc(100% - 28px)); height: min(62%, 560px); border: 1px solid #2f4a7d; border-radius: 14px; }
-    #scratch.tall { top: 14px; height: auto; border-radius: 14px; }
+    .sheet { left: auto; right: 14px; bottom: 14px; width: min(820px, calc(100% - 28px)); height: min(62%, 560px); border: 1px solid #2f4a7d; border-radius: 14px; }
+    .sheet.tall { top: 14px; height: auto; border-radius: 14px; }
+    .sheet:modal { height: min(62vh, 560px); padding-bottom: 0; }
+    .sheet:modal.tall { top: 14px; height: auto; padding-top: 0; }
   }
   .s-head { flex: none; display: flex; align-items: center; gap: 5px; padding: 6px 6px 6px 10px; border-bottom: 1px solid var(--line); }
   .s-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--muted); font: 12.5px/1.2 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
@@ -374,6 +383,23 @@
   .s-status { flex: none; margin: 0; padding: 10px 12px; color: var(--muted); font-size: 13px; line-height: 1.4; }
   .s-status.error { color: var(--danger); }
   #scratch-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg); }
+  #copy-panel { z-index: 9; } /* over the scratch terminal when both are up */
+  #copy-panel .copy-icon { color: var(--accent); }
+  #copy-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #copy-text { flex: 1; min-height: 0; width: 100%; margin: 0; padding: 8px 10px; border: 0; border-radius: 0; resize: none; outline: none; background: var(--bg); color: var(--text); font: 13px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; tab-size: 4; overscroll-behavior: contain; }
+  .dev-phone #copy-text, .dev-tablet #copy-text { font-size: 16px; } /* iOS zooms into smaller text when it gets the focus */
+  #copy-text::selection { background: #33467c; }
+  .copy-foot { border-top: 1px solid var(--line); border-bottom: 0; padding-bottom: calc(7px + env(safe-area-inset-bottom)); }
+  #copy-sources { gap: 4px; padding: 6px 8px; }
+  #copy-sources .seg { flex: none; height: 30px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--key); color: var(--muted); font: 600 12.5px/1 system-ui, -apple-system, sans-serif; cursor: pointer; touch-action: manipulation; }
+  #copy-sources .seg[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: #18263f; }
+  /* while the copy panel is up nothing on the key bar is typed: it is for the terminal, the panel is not */
+  #app.copying #keys, #app.copying .pager { opacity: 0.35; pointer-events: none; }
+  .hbtn, #text-dialog .text-tools button { position: relative; }
+  /* a scratch terminal running out of sight (minimised, or left from before) */
+  #scratch-open.has-scratch::after, #text-scratch.has-scratch::after { content: ""; position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: #9ece6a; box-shadow: 0 0 0 2px var(--bar); }
+  .s-hint { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .s-status.ok { color: #9ece6a; }
 
   /* ---- file manager */
   #files-dialog { display: flex; flex-direction: column; width: min(660px, calc(100% - 24px)); height: min(80vh, 760px); max-height: calc(100% - 24px); padding: 0; overflow: hidden; }
@@ -446,11 +472,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2zM22 4h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8z"/></svg>
         <span>Read</span>
       </button>
-      <button class="hbtn" id="plain" type="button" title="Plain text: the conversation as raw text, easy to copy" aria-label="Plain text" aria-haspopup="dialog" aria-controls="text-dialog" disabled>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h6"/></svg>
-        <span>Text</span>
-      </button>
-      <button class="hbtn" id="copy" type="button" title="Copy selected text" aria-label="Copy selected terminal text" disabled>
+      <button class="hbtn" id="copy-open" type="button" title="Copy: the text as an editable copy (nothing typed there reaches the terminal)" aria-label="Copy" aria-controls="copy-panel" aria-expanded="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></svg>
         <span>Copy</span>
       </button>
@@ -482,11 +504,13 @@
     <iframe id="t" title="Terminal"></iframe>
     <div class="pager" id="pager-left" role="group" aria-label="Page up and down"></div>
     <div class="pager" id="pager-right" role="group" aria-label="Page up and down"></div>
-    <section id="scratch" aria-label="Scratch terminal" hidden>
+    <dialog id="scratch" class="sheet" aria-label="Scratch terminal">
       <div class="s-head">
         <span class="s-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 4 4-4 4M12 17h6"/></svg><b>Scratch</b><span id="scratch-where"></span></span>
         <button class="sbtn" id="scratch-paste" type="button" title="Paste from the clipboard" aria-label="Paste"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h4"/></svg><span>Paste</span></button>
+        <button class="sbtn" id="scratch-copy" type="button" aria-pressed="false" title="Copy: the selection, or pick from the output as text" aria-label="Copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></svg><span>Copy</span></button>
         <button class="sbtn" id="scratch-tall" type="button" aria-pressed="false" title="Taller" aria-label="Taller"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5-5 5 5M7 14l5 5 5-5"/></svg></button>
+        <button class="sbtn" id="scratch-min" type="button" title="Minimise: hide it, the shell keeps running (Scratch brings it back)" aria-label="Minimise"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 17h12"/></svg></button>
         <button class="sbtn danger" id="scratch-close" type="button" title="Close: ends this shell" aria-label="Close the scratch terminal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg></button>
       </div>
       <form class="s-bar" id="scratch-pastebox" hidden>
@@ -495,7 +519,28 @@
       </form>
       <p class="s-status" id="scratch-status" role="status" hidden></p>
       <iframe id="scratch-frame" title="Scratch terminal"></iframe>
-    </section>
+    </dialog>
+    <dialog id="copy-panel" class="sheet" aria-label="Copy">
+      <div class="s-head">
+        <span class="s-title"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></svg><b>Copy</b><span id="copy-what"></span></span>
+        <button class="sbtn" id="copy-wrap" type="button" aria-pressed="true" title="Wrap long lines" aria-label="Wrap long lines"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h13a3 3 0 0 1 0 6h-4m2-2-2 2 2 2M4 18h5"/></svg></button>
+        <button class="sbtn" id="copy-reload" type="button" title="Reload the text (your edits go)" aria-label="Reload the text"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
+        <button class="sbtn" id="copy-tall" type="button" aria-pressed="false" title="Taller" aria-label="Taller"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5-5 5 5M7 14l5 5 5-5"/></svg></button>
+        <button class="sbtn" id="copy-close" type="button" title="Close" aria-label="Close the copy panel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg></button>
+      </div>
+      <div class="s-bar" id="copy-sources" role="group" aria-label="Text from">
+        <button class="seg" type="button" data-src="conversation">Conversation</button>
+        <button class="seg" type="button" data-src="terminal">Terminal</button>
+        <button class="seg" type="button" data-src="scratch">Scratch</button>
+      </div>
+      <p class="s-status" id="copy-status" role="status" hidden></p>
+      <textarea id="copy-text" wrap="soft" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Editable copy of the text"></textarea>
+      <div class="s-bar copy-foot">
+        <span class="s-hint">Edit freely: nothing here reaches the terminal.</span>
+        <button class="sbtn" id="copy-selection" type="button">Copy selection</button>
+        <button class="sbtn primary" id="copy-all" type="button">Copy all</button>
+      </div>
+    </dialog>
   </div>
   <div id="keys"></div>
   <div id="cmd-menu" role="menu" aria-label="Common commands" hidden></div>
@@ -524,11 +569,13 @@
     <a id="text-back" class="text-back" href="./" title="Detach: back to the session list (the session keeps running)" aria-label="Detach and return to the session list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg><span>Detach</span></a>
     <h2 id="text-heading" class="sr-only">Read</h2>
     <div class="text-tools">
+      <button id="text-files" type="button" aria-label="Files" title="Files: browse folders, insert a path into the message" aria-haspopup="dialog" aria-controls="files-dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+      <button id="text-scratch" type="button" aria-label="Scratch terminal" title="Scratch terminal over this view" aria-controls="scratch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="16" rx="3"/><path d="m6.5 9 3 3-3 3M12 15h4"/></svg></button>
       <button id="text-render" type="button" aria-pressed="true" aria-label="Render Markdown, code and math" title="Render Markdown, code and math" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
-      <button id="text-view" type="button" aria-pressed="false" aria-label="Plain text view" title="Plain text view: raw text, easy to copy" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h6"/></svg></button>
+      <button id="text-copy" type="button" aria-label="Copy" title="Copy: the conversation as editable text" aria-controls="copy-panel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></svg></button>
       <button id="text-fmt" type="button" aria-pressed="false" aria-expanded="false" aria-controls="text-fmt-panel" aria-label="Text size and width" title="Text size and width"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 19 8.5 5h1L15 19M5.2 14h7.6M16 19l3.2-8h.6L23 19M17 16.5h5"/></svg></button>
       <button id="text-refresh" type="button" aria-label="Refresh" title="Load the latest output"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
-      <button id="text-done" type="button" aria-label="Done" title="Close" autofocus><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      <button id="text-done" type="button" aria-label="Done: back to the terminal" title="Back to the terminal (the session keeps running)" autofocus>Done</button>
     </div>
   </div>
   <div id="text-fmt-panel" role="group" aria-label="Text size and width" hidden>
@@ -607,6 +654,6 @@
     <button id="upload-paste" class="primary" type="button" hidden>Paste</button>
   </div>
 </dialog>
-<script src="term.js?v=20261031-scratch"></script>
+<script src="term.js?v=20261031-copy"></script>
 </body>
 </html>

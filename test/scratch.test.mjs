@@ -19,7 +19,9 @@ test('scratch terminals: opened in the session\'s directory, in no list, closed 
     assert.equal(api.tmux('show-options', '-v', '-t', res.body.id, '@tmux_web_scratch'), '1');
     assert.equal(api.tmux('show-options', '-v', '-t', res.body.id, 'status'), 'off');
     const names = async () => (await api.request('GET', '/api/sessions?owner=all')).body.sessions.map((s) => s.name);
-    assert.deepEqual(await names(), ['work'], 'no list shows it');
+    assert.deepEqual(await names(), ['work'], 'no session list shows it');
+    const mine = (await api.request('GET', '/api/scratch')).body.scratch;
+    assert.deepEqual(mine.map((s) => [s.id, s.instance, s.name, s.path]), [[res.body.id, res.body.instance, res.body.name, dir]], 'but its own list does');
     // the terminal may attach to it like to any session of one's own
     const verify = await api.request('GET', '/verify', { 'x-forwarded-uri': `/term/ws?arg=${encodeURIComponent(res.body.id)}` });
     assert.equal(verify.status, 200);
@@ -32,7 +34,8 @@ test('scratch terminals: opened in the session\'s directory, in no list, closed 
     assert.equal((await api.request('POST', '/api/scratch', {}, { from: '$999' })).body.path, home.body.path);
     for (const from of ['work', 5, '$1;ls']) assert.equal((await api.request('POST', '/api/scratch', {}, { from })).status, 400, String(from));
     assert.equal((await api.request('POST', '/api/scratch', { origin: 'https://evil.example' }, {})).status, 403);
-    assert.equal((await api.request('GET', '/api/scratch')).status, 405);
+    assert.equal((await api.request('PUT', '/api/scratch')).status, 405);
+    assert.ok(!(await api.request('GET', '/api/scratch')).body.scratch.some((s) => s.id === res.body.id), 'closed: gone from the list');
     // nobody attached for longer than TMUX_WEB_SCRATCH_IDLE (2 s here): the sweep ends them, and leaves real sessions alone
     const scratch = () => api.tmux('list-sessions', '-F', '#{@tmux_web_scratch}').split('\n').filter((v) => v === '1').length;
     assert.equal(scratch(), 2);
@@ -47,5 +50,18 @@ test('scratch terminals: at most 8 at a time', async () => {
   try {
     for (let i = 0; i < 8; i++) assert.equal((await api.request('POST', '/api/scratch', {}, {})).status, 201);
     assert.equal((await api.request('POST', '/api/scratch', {}, {})).status, 429);
+  } finally { await api.stop(); }
+});
+
+test('scratch terminals: everybody lists only their own, even one who may see everything', async () => {
+  const api = await startApi({ ALLOWED_EMAILS: 'boss@x.com alice@x.com' });
+  try {
+    api.writeUsers({ users: { 'boss@x.com': { name: 'Boss', admin: true }, 'alice@x.com': { name: 'Alice' } } });
+    const boss = await api.requestAs('boss@x.com', 'POST', '/api/scratch', {}, {});
+    const alice = await api.requestAs('alice@x.com', 'POST', '/api/scratch', {}, {});
+    assert.deepEqual([boss.status, alice.status], [201, 201]);
+    const list = async (email) => (await api.requestAs(email, 'GET', '/api/scratch')).body.scratch.map((s) => s.id);
+    assert.deepEqual(await list('boss@x.com'), [boss.body.id]);
+    assert.deepEqual(await list('alice@x.com'), [alice.body.id]);
   } finally { await api.stop(); }
 });
