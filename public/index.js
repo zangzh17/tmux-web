@@ -6,7 +6,11 @@
   const $name = document.getElementById('session-name');
   const $createButton = document.getElementById('create-button');
   const $createError = document.getElementById('create-error');
-  const $previewButtons = document.querySelectorAll('#preview-options button');
+  const $previewLess = document.getElementById('preview-less');
+  const $previewMore = document.getElementById('preview-more');
+  const $previewToggle = document.getElementById('preview-toggle');
+  const $previewValue = document.getElementById('preview-value');
+  const $listTitle = document.getElementById('list-title');
   const $closeDialog = document.getElementById('close-dialog');
   const $closeConfirm = document.getElementById('close-confirm');
   const $closeCancel = document.getElementById('close-cancel');
@@ -40,12 +44,13 @@
   let loadRequest = 0;
   document.getElementById('host').textContent = location.hostname;
 
-  const PREVIEW_LINES = [0, 1, 2, 5, 7, 10, 15, 20, 30, 50];
+  const PREVIEW_LINES = [0, 1, 2, 3, 5, 7, 10, 15, 20, 30, 50];
   let previewLines = 7;
   try {
     const saved = localStorage.getItem('tmuxweb.previewLines');
     if (saved !== null && PREVIEW_LINES.includes(Number(saved))) previewLines = Number(saved);
   } catch { /* private mode */ }
+  let previewShown = previewLines || 7; // what the middle button brings back after hiding the previews
   // Whose sessions to list: 'me' (started here), 'local' (started outside the web page) and other people's emails.
   // Only people the server says we may view are offered; it also ignores anything we are not allowed to ask for.
   let me = null; // from api/me; null until known, { canViewOthers: false } on a server without it
@@ -72,6 +77,32 @@
     if (sec < 86400) return `${Math.round(sec / 3600)}h ago`;
     return `${Math.round(sec / 86400)}d ago`;
   };
+  const tokens = (n) => (n >= 999_500 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+
+  // How full a Claude session's conversation is: a small bar, amber from half, red from 80%. Just compacted: not known yet.
+  function contextMeter({ tokens: used, window, compacted }) {
+    if (compacted) {
+      const meter = el('span', 'ctx compacted', 'ctx compacted');
+      meter.prepend(el('span', 'ctx-bar'));
+      meter.title = 'Claude just compacted this conversation; the size shows again after its next answer';
+      return meter;
+    }
+    const pct = Math.min(100, Math.round((used / window) * 100));
+    const meter = el('span', `ctx${pct >= 80 ? ' bad' : pct >= 50 ? ' warn' : ''}`);
+    meter.title = `Claude context: ${tokens(used)} of ${tokens(window)} tokens (${pct}%)`;
+    meter.setAttribute('role', 'meter');
+    meter.setAttribute('aria-label', 'Claude context used');
+    meter.setAttribute('aria-valuemin', '0');
+    meter.setAttribute('aria-valuemax', '100');
+    meter.setAttribute('aria-valuenow', String(pct));
+    meter.setAttribute('aria-valuetext', `${pct}%, ${tokens(used)} of ${tokens(window)} tokens`);
+    const bar = el('span', 'ctx-bar');
+    const fill = el('i');
+    fill.style.width = `${Math.max(pct, 4)}%`;
+    bar.append(fill);
+    meter.append(bar, el('b', null, `${pct}%`), document.createTextNode(' ctx'));
+    return meter;
+  }
 
   // Everything about owners is multi-user: a server without it (no users.json) says `multiUser: false` and none of it is shown.
   function ownerTag(s) {
@@ -96,6 +127,7 @@
     const row = el('div', 'row');
     row.append(el('span', 'name', s.name));
     const meta = el('div', 'meta');
+    if (s.context) meta.append(contextMeter(s.context));
     meta.append(...ownerTag(s));
     meta.append(el('span', null, `${s.windows} ${s.windows === 1 ? 'window' : 'windows'}`));
     meta.append(s.attached > 0 ? el('span', 'badge-on', `● Attached ×${s.attached}`) : el('span', null, 'Detached'));
@@ -104,7 +136,7 @@
     where.append(el('b', null, s.command), document.createTextNode(` · ${s.path}`));
     a.append(row, meta, where);
     if (previewLines && s.preview && s.preview.length) {
-      const preview = el('pre', 'peek');
+      const preview = el('pre', `peek${s.preview.length > previewLines ? ' cut' : ''}`);
       for (const line of s.preview.slice(-previewLines)) preview.append(el('span', 'peek-line', line));
       a.append(preview);
     }
@@ -162,6 +194,7 @@
     const json = JSON.stringify({ data, previewLines, who: me?.email, sharePeople: me?.sharePeople });
     if (json === lastJson) return;
     lastJson = json;
+    $listTitle.textContent = data.sessions.length ? `${data.sessions.length} ${data.sessions.length === 1 ? 'session' : 'sessions'}` : 'Sessions';
     $list.replaceChildren();
     if (!data.sessions.length) {
       const li = el('li', 'empty');
@@ -186,6 +219,7 @@
     // the row only earns its place when there is somebody else to look at
     const someoneElse = !!me?.canViewOthers && me.people.length > 0;
     $ownerFilter.hidden = !someoneElse;
+    $listTitle.hidden = someoneElse;
     $whoami.hidden = !(me?.multiUser && me.email);
     const elsewhere = !!me?.myAccount && me.account !== me.myAccount; // an admin in another account
     if (!$whoami.hidden) $whoami.textContent = `Signed in as ${me.name} · ${me.email}${elsewhere ? ` · in the ${me.account} account` : ''}`;
@@ -334,20 +368,237 @@
     return true;
   }
 
-  function updatePreviewButtons() {
-    for (const button of $previewButtons) {
-      button.setAttribute('aria-pressed', String(Number(button.dataset.lines) === previewLines));
+  // ---- preview lines: − and + step through PREVIEW_LINES, the middle button hides the previews or brings them back
+  function updatePreview() {
+    const i = PREVIEW_LINES.indexOf(previewLines);
+    $previewLess.disabled = i <= 0;
+    $previewMore.disabled = i >= PREVIEW_LINES.length - 1;
+    $previewValue.textContent = previewLines ? String(previewLines) : 'Off';
+    $previewToggle.classList.toggle('off', !previewLines);
+    $previewToggle.title = previewLines ? `Preview: the last ${previewLines} ${previewLines === 1 ? 'line' : 'lines'} of each session. Hide previews` : 'Previews are hidden. Show them';
+    $previewToggle.setAttribute('aria-label', $previewToggle.title);
+  }
+  function setPreview(lines) {
+    previewLines = lines;
+    if (lines) previewShown = lines;
+    try { localStorage.setItem('tmuxweb.previewLines', String(lines)); } catch { /* private mode */ }
+    updatePreview();
+    if (latestData) render(latestData);
+  }
+  const stepPreview = (by) => setPreview(PREVIEW_LINES[Math.min(PREVIEW_LINES.length - 1, Math.max(0, PREVIEW_LINES.indexOf(previewLines) + by))]);
+  $previewLess.addEventListener('click', () => stepPreview(-1));
+  $previewMore.addEventListener('click', () => stepPreview(1));
+  $previewToggle.addEventListener('click', () => setPreview(previewLines ? 0 : previewShown));
+  updatePreview();
+
+  // ---- Claude usage of this account (api/usage). Two rings in the header: what is left of the 5-hour and the weekly limit. They
+  // open a panel with each window's trend: its usage so far against an even pace (the dotted diagonal), and where the average
+  // pace so far leads. The panel starts open on a wide screen and closed on a phone; a choice is remembered per device kind.
+  // Everything is built once and then updated, so the rings, numbers and dots move to new values instead of jumping.
+  const $usagePill = document.getElementById('usage-pill');
+  const $usagePanel = document.getElementById('usage-panel');
+  const $usageGrid = document.getElementById('usage-grid');
+  const $usageNote = document.getElementById('usage-note');
+  const LIMITS = [
+    { key: 'fiveHour', short: '5h', name: '5-hour limit', span: 5 * 3600, col: 1 },
+    { key: 'sevenDay', short: '7d', name: 'Weekly limit', span: 7 * 86400, col: 2 },
+  ];
+  const USAGE_ERRORS = {
+    'login expired': 'Claude’s login here has expired; the numbers move again once Claude runs',
+    'not signed in': 'Claude is signed out on this account',
+    'unreadable login': 'Claude’s login file could not be read',
+    'rate limited': 'Anthropic asked to slow down; trying again later',
+    unreachable: 'Anthropic could not be reached; trying again',
+  };
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const svgEl = (tag, attrs = {}) => {
+    const n = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
+    return n;
+  };
+  const RING = 'M18 3.5a14.5 14.5 0 1 1 0 29a14.5 14.5 0 1 1 0-29'; // a circle from the top, clockwise
+  const Y = (pct) => 96 - pct * 0.92; // chart: 0..100 % in a 300 x 100 box, a little room at the top and bottom
+  const severity = (left) => (left <= 20 ? 'bad' : left <= 50 ? 'warn' : 'ok'); // as in the statusline
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  const usageKind = () => (matchMedia('(max-width: 719px)').matches ? 'phone' : 'desktop');
+  const span = (s) => {
+    const m = Math.max(0, Math.round(s / 60));
+    const d = Math.floor(m / 1440);
+    const h = Math.floor((m % 1440) / 60);
+    return d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m % 60}m`;
+  };
+  const clock = (t, day) => new Date(t * 1000).toLocaleString([], day ? { weekday: 'short', hour: 'numeric', minute: '2-digit' } : { hour: 'numeric', minute: '2-digit' });
+  let usage = null;
+  let usageOpen = null; // null until there is something to show
+  const parts = {};
+
+  function countTo(node, to) {
+    const from = Number(node.dataset.value ?? 0);
+    node.dataset.value = String(to);
+    if (from === to || reducedMotion.matches) { node.textContent = String(to); return; }
+    const t0 = performance.now();
+    const step = (t) => {
+      if (node.dataset.value !== String(to)) return; // a newer value took over
+      const k = Math.min(1, (t - t0) / 900);
+      node.textContent = String(Math.round(from + (to - from) * (1 - (1 - k) ** 3)));
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  function buildUsage() {
+    for (const lim of LIMITS) {
+      const p = parts[lim.key] = {};
+      p.gauge = el('span', 'gauge');
+      const ring = svgEl('svg', { class: 'ring', viewBox: '0 0 36 36', 'aria-hidden': 'true' });
+      p.ring = svgEl('path', { class: 'ring-fill', d: RING, pathLength: 100 });
+      p.ring.style.strokeDasharray = '0 100';
+      ring.append(svgEl('path', { class: 'ring-track', d: RING, pathLength: 100 }), p.ring);
+      p.num = el('span', 'gauge-num', '0');
+      const text = el('span', 'gauge-text');
+      text.append(p.num, el('span', 'gauge-label', lim.short));
+      p.gauge.append(ring, text);
+      $usagePill.append(p.gauge);
+
+      p.card = el('article', 'u-card');
+      const head = el('div', 'u-head');
+      p.big = el('b', 'u-num', '0');
+      const left = el('span', 'u-left');
+      left.append(p.big, document.createTextNode(' left'));
+      head.append(el('span', 'u-title', lim.name), left);
+      p.chart = svgEl('svg', { class: 'u-chart', viewBox: '0 0 300 100', preserveAspectRatio: 'none', 'aria-hidden': 'true' });
+      const fill = svgEl('linearGradient', { id: `u-fill-${lim.key}`, x1: 0, y1: 0, x2: 0, y2: 1 });
+      fill.append(svgEl('stop', { offset: 0, 'stop-color': 'currentColor', 'stop-opacity': 0.34 }), svgEl('stop', { offset: 1, 'stop-color': 'currentColor', 'stop-opacity': 0.03 }));
+      const defs = svgEl('defs');
+      defs.append(fill);
+      p.area = svgEl('path', { class: 'area', fill: `url(#u-fill-${lim.key})` });
+      p.line = svgEl('path', { class: 'line' });
+      p.gap = svgEl('path', { class: 'gap' });
+      p.proj = svgEl('path', { class: 'proj' });
+      p.now = svgEl('line', { class: 'now', y1: 0, y2: 100 });
+      p.chart.append(defs, svgEl('line', { class: 'limit', x1: 0, x2: 300, y1: Y(100), y2: Y(100) }), svgEl('line', { class: 'base', x1: 0, x2: 300, y1: Y(0), y2: Y(0) }),
+        svgEl('path', { class: 'pace', d: `M0 ${Y(0)}L300 ${Y(100)}` }), p.now, p.area, p.gap, p.line, p.proj);
+      const sweep = el('div', 'u-sweep');
+      sweep.append(p.chart);
+      p.dot = el('span', 'u-dot');
+      const plot = el('div', 'u-plot');
+      plot.append(sweep, p.dot);
+      p.axis = el('div', 'u-axis');
+      p.foot = el('p', 'u-foot');
+      p.card.append(head, plot, p.axis, p.foot);
+      $usageGrid.append(p.card);
     }
+    const chev = svgEl('svg', { class: 'usage-chev', viewBox: '0 0 12 12', 'aria-hidden': 'true' });
+    chev.append(svgEl('path', { d: 'M3 4.5 6 7.5 9 4.5' }));
+    $usagePill.append(chev);
   }
-  for (const button of $previewButtons) {
-    button.addEventListener('click', () => {
-      previewLines = Number(button.dataset.lines);
-      try { localStorage.setItem('tmuxweb.previewLines', String(previewLines)); } catch { /* private mode */ }
-      updatePreviewButtons();
-      if (latestData) render(latestData);
-    });
+
+  // One window: x is its time from start to reset, y the share used. A window that has ended since the last answer is a new one
+  // that has not started yet (it opens with the next message).
+  function drawLimit(lim, p, cur, now) {
+    const open = cur.resetsAt != null && cur.resetsAt > now;
+    const used = open ? cur.used : 0;
+    const start = open ? cur.resetsAt - lim.span : now;
+    const end = start + lim.span;
+    const X = (t) => Math.min(300, Math.max(0, ((t - start) / lim.span) * 300));
+    const pts = open ? (usage.history || []).filter((h) => h[0] >= start && h[0] <= now && h[lim.col] != null).map((h) => [h[0], h[lim.col]]) : [];
+    if (open) pts.push([now, used]);
+    // from the window's start (nothing used) to the first answer: solid when that is close, dotted when it is a guess
+    const guessed = open && pts[0][0] - start > 20 * 60;
+    if (open && !guessed) pts.unshift([start, 0]);
+    const path = pts.map(([t, v], i) => `${i ? 'L' : 'M'}${X(t).toFixed(1)} ${Y(v).toFixed(1)}`).join('');
+    if (path) {
+      p.line.setAttribute('d', path);
+      p.area.setAttribute('d', `${path}L${X(pts.at(-1)[0]).toFixed(1)} ${Y(0)}L${X(pts[0][0]).toFixed(1)} ${Y(0)}Z`);
+    } else { p.line.removeAttribute('d'); p.area.removeAttribute('d'); }
+    if (guessed) p.gap.setAttribute('d', `M0 ${Y(0)}L${X(pts[0][0]).toFixed(1)} ${Y(pts[0][1]).toFixed(1)}`); else p.gap.removeAttribute('d');
+    // where the average pace so far leads: out before the reset, or how much is used by then
+    const elapsed = now - start;
+    const rate = used / Math.max(elapsed, 1);
+    let runsOut = null;
+    let byReset = null;
+    if (open && elapsed > lim.span * 0.08 && used >= 1) {
+      const full = now + (100 - used) / rate;
+      if (full < end) runsOut = full; else byReset = Math.min(100, used + rate * (end - now));
+      const to = Math.min(full, end);
+      p.proj.setAttribute('d', `M${X(now).toFixed(1)} ${Y(used).toFixed(1)}L${X(to).toFixed(1)} ${Y(Math.min(100, used + rate * (to - now))).toFixed(1)}`);
+    } else p.proj.removeAttribute('d');
+    p.now.setAttribute('x1', X(now).toFixed(1));
+    p.now.setAttribute('x2', X(now).toFixed(1));
+    p.dot.style.left = `${(X(now) / 3).toFixed(2)}%`;
+    p.dot.style.top = `${Y(used).toFixed(2)}%`;
+    const day = lim.span > 86400;
+    const key = el('span', 'u-key');
+    key.append(el('i'), document.createTextNode('even pace'));
+    if (p.proj.hasAttribute('d')) key.append(el('i', 'proj'), document.createTextNode('this pace'));
+    p.axis.replaceChildren(el('span', null, open ? clock(start, day) : 'Now'), key, el('span', null, open ? `Resets ${clock(end, day)}` : `+${span(lim.span)}`));
+    if (!open) { p.foot.replaceChildren(document.createTextNode('Not started: it opens with your next message.')); return; }
+    const foot = [document.createTextNode('Resets in '), el('b', null, span(end - now))];
+    if (runsOut) foot.push(document.createTextNode(' · '), el('span', 'alarm', `runs out in ~${span(runsOut - now)} at this pace`));
+    else if (byReset != null) foot.push(document.createTextNode(` · about ${Math.round(byReset)}% used by then at this pace`));
+    p.foot.replaceChildren(...foot);
   }
-  updatePreviewButtons();
+
+  function setUsageOpen(open, remember) {
+    usageOpen = open;
+    $usagePanel.classList.toggle('open', open);
+    $usagePill.setAttribute('aria-expanded', String(open));
+    if (remember) { try { localStorage.setItem(`tmuxweb.usageOpen.${usageKind()}`, open ? '1' : '0'); } catch { /* private mode */ } }
+    if (open) {
+      for (const lim of LIMITS) { // draw the charts in again
+        parts[lim.key].card.classList.remove('draw');
+        void parts[lim.key].card.offsetWidth;
+        parts[lim.key].card.classList.add('draw');
+      }
+    }
+    labelUsage();
+  }
+  function labelUsage() {
+    const said = LIMITS.filter((lim) => !parts[lim.key].gauge.hidden).map((lim) => `${lim.name}: ${parts[lim.key].num.dataset.value}% left`);
+    $usagePill.title = `Claude usage. ${said.join(', ')}`;
+    $usagePill.setAttribute('aria-label', `${$usagePill.title}. ${usageOpen ? 'Hide' : 'Show'} the trend`);
+  }
+  $usagePill.addEventListener('click', () => setUsageOpen(!usageOpen, true));
+
+  function renderUsage() {
+    const shown = usage?.at != null && LIMITS.some((lim) => usage[lim.key]);
+    $usagePill.hidden = $usagePanel.hidden = !shown;
+    if (!shown) return;
+    const fresh = !$usagePill.childElementCount;
+    if (fresh) buildUsage();
+    const now = Date.now() / 1000;
+    for (const lim of LIMITS) {
+      const p = parts[lim.key];
+      const cur = usage[lim.key];
+      p.gauge.hidden = p.card.hidden = !cur;
+      if (!cur) continue;
+      const left = Math.round(100 - (cur.resetsAt != null && cur.resetsAt <= now ? 0 : cur.used));
+      p.gauge.dataset.sev = p.card.dataset.sev = severity(left);
+      const ring = () => { p.ring.style.strokeDasharray = `${left} 100`; };
+      if (fresh) requestAnimationFrame(() => requestAnimationFrame(ring)); else ring(); // from empty on the first answer
+      countTo(p.num, left);
+      countTo(p.big, left);
+      drawLimit(lim, p, cur, now);
+    }
+    const age = now - usage.at;
+    $usagePill.classList.toggle('stale', age > 15 * 60);
+    const problem = usage.error && USAGE_ERRORS[usage.error];
+    $usageNote.textContent = problem || age > 15 * 60 ? `Updated ${ago(age).toLowerCase()}${problem ? ` · ${problem}` : ''}` : '';
+    if (usageOpen === null) {
+      let saved = null;
+      try { saved = localStorage.getItem(`tmuxweb.usageOpen.${usageKind()}`); } catch { /* private mode */ }
+      requestAnimationFrame(() => setUsageOpen(saved === null ? usageKind() === 'desktop' : saved === '1', false));
+    } else labelUsage();
+  }
+
+  async function loadUsage() {
+    try {
+      const res = await fetch('api/usage', { cache: 'no-store', credentials: 'same-origin' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      usage = await res.json();
+    } catch { /* keep the last answer */ }
+    renderUsage();
+  }
 
   async function load() {
     const request = ++loadRequest;
@@ -377,11 +628,15 @@
     }
   }
 
-  const start = () => { load(); clearInterval(timer); timer = setInterval(load, 4000); };
-  const stop = () => { clearInterval(timer); timer = null; };
+  let usageTimer = null;
+  const start = () => {
+    load(); clearInterval(timer); timer = setInterval(load, 4000);
+    loadUsage(); clearInterval(usageTimer); usageTimer = setInterval(loadUsage, 60_000);
+  };
+  const stop = () => { clearInterval(timer); timer = null; clearInterval(usageTimer); usageTimer = null; };
   document.addEventListener('visibilitychange', () => (document.hidden ? stop() : start()));
   window.addEventListener('pageshow', (e) => { if (e.persisted) start(); });
-  $refresh.addEventListener('click', load);
+  $refresh.addEventListener('click', () => { load(); loadUsage(); });
   // ---- rename: a dialog with the name in it; the same rules and the same request as renaming from inside a session
   const NAME_RULE = /^[\p{L}\p{N}][\p{L}\p{N} _-]{0,47}$/u;
   $renameCancel.addEventListener('click', () => { if (!renaming) $renameDialog.close(); });

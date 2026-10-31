@@ -276,3 +276,32 @@ test('two Claude panes in one directory each show their own conversation, never 
     fs.rmSync(file(`${uuidB}.jsonl`), { force: true });
   }
 });
+
+test('the session list says how full each Claude conversation is', async () => {
+  const answer = (input, read, write, model = 'claude-opus-5-5', extra = {}) => ({ type: 'assistant', timestamp: stamp(), ...extra,
+    message: { role: 'assistant', model, content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: input, cache_read_input_tokens: read, cache_creation_input_tokens: write, output_tokens: 999 } } });
+  const line = (rec) => `${JSON.stringify(rec)}\n`;
+  const context = async (query = '') => (await api.request('GET', `/api/sessions${query}`)).body.sessions.find((s) => s.id === id)?.context;
+  const plain = api.start('notclaude', 'cat'); // not Claude: TMUX_WEB_CLAUDE_COMMAND is ^sleep$ here
+  try {
+    write([user('hi'), answer(10, 50_000, 2_000), answer(5, 1, 1, 'claude-opus-5-5', { isSidechain: true })], 'ctx.jsonl');
+    assert.deepEqual(await context(), { tokens: 52_010, window: 1_000_000, model: 'claude-opus-5-5' }, 'input + cache read + cache write; a subagent does not count');
+    append(line(answer(100, 150_000, 0, 'claude-opus-4-8')), 'ctx.jsonl');
+    assert.deepEqual(await context(), { tokens: 150_100, window: 200_000, model: 'claude-opus-4-8' }, 'an older model has 200k');
+    append(line(result('x'.repeat(700_000))), 'ctx.jsonl');
+    assert.equal((await context())?.tokens, 150_100, 'found behind a long tool result (the end of the file is read, more as needed)');
+    append(line(answer(0, 250_000, 0, 'claude-opus-4-8')), 'ctx.jsonl');
+    assert.equal((await context())?.window, 1_000_000, 'past 200k the window must be 1M');
+    append('{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":7', 'ctx.jsonl');
+    assert.equal((await context())?.tokens, 250_000, 'a half-written last line is not read');
+    append(`\n${line(user('summary of the conversation', { isCompactSummary: true }))}`, 'ctx.jsonl');
+    assert.deepEqual(await context(), { compacted: true }, 'compacted: unknown until Claude answers again');
+    append(line(answer(3, 20_000, 0)), 'ctx.jsonl');
+    assert.equal((await context())?.tokens, 20_003);
+    assert.equal(await context('?preview=0'), null, 'the light list reads no transcript');
+    assert.equal((await api.request('GET', '/api/sessions')).body.sessions.find((s) => s.id === plain)?.context, null, 'not Claude: none');
+  } finally {
+    fs.rmSync(file('ctx.jsonl'), { force: true });
+    api.tmux('kill-session', '-t', plain);
+  }
+});

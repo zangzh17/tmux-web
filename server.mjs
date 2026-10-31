@@ -246,7 +246,7 @@ const sharePeople = () => (multiUser() && !personal() ? [...config().users]
 
 // ---- tmux
 const FIELDS = ['session_id', 'pid', 'session_name', 'session_windows', 'session_attached', 'session_activity',
-  'session_created', 'pane_current_command', 'pane_current_path', 'pane_id', '@tmux_web_owner', '@tmux_web_share'];
+  'session_created', 'pane_current_command', 'pane_current_path', 'pane_id', '@tmux_web_owner', '@tmux_web_share', 'pane_pid'];
 const FMT = FIELDS.map((f) => `#{${f}}`).join('\t');
 
 const tmux = (args, maxBuffer = 1 << 20) => new Promise((resolve, reject) => {
@@ -274,11 +274,11 @@ async function listRows() {
   }
   const home = os.homedir();
   return out.split('\n').filter(Boolean).map((l) => l.split('\t')).filter((f) => f.length === FIELDS.length)
-    .map(([id, serverPid, name, windows, attached, activity, created, command, cwd, paneId, owner, share]) => ({
+    .map(([id, serverPid, name, windows, attached, activity, created, command, cwd, paneId, owner, share, panePid]) => ({
       id, instance: `${serverPid}:${created}`, name, command,
       windows: +windows, attached: +attached, activity: +activity, created: +created,
       path: cwd === home || cwd.startsWith(`${home}/`) ? `~${cwd.slice(home.length)}` : cwd,
-      paneId, owner: owner.trim().toLowerCase(), share,
+      paneId, panePid: +panePid, cwd, owner: owner.trim().toLowerCase(), share,
     }));
 }
 
@@ -299,18 +299,20 @@ function ownerSpecs(user, query) {
 }
 
 const sharedWith = (share) => [...shareOf(share)].map(([email, level]) => ({ email, name: displayName(email), level }));
-async function listSessions(user, specs, withPreview) {
+// light: the terminal page's switcher (?preview=0) wants names only, so neither previews nor Claude's context are read.
+async function listSessions(user, specs, light) {
   const wanted = ({ owner, share }) => specs.includes('all') || shareOf(share).has(user.email)
     || (owner === user.email ? specs.includes('me') : owner ? specs.includes(owner) : specs.includes('local'));
   const rows = (await listRows()).filter((r) => accessFor(user, r.owner, r.share) && wanted(r));
   // previews are read only for what is returned: a session hidden by the filter never has its screen captured
-  const sessions = await Promise.all(rows.map(async ({ paneId, owner, share, ...row }) => {
+  const sessions = await Promise.all(rows.map(async ({ paneId, panePid, cwd, owner, share, ...row }) => {
     const access = accessFor(user, owner, share);
     return {
       ...row, owner: multiUser() ? ownerOf(owner) : null, mine: multiUser() && owner === user.email, access, foreign: foreign(user, owner),
       share: access === 'full' && multiUser() ? sharedWith(share) : [], // whom it is shared with: for those who may change that
       sharedWithMe: shareOf(share).get(user.email) || null,
-      preview: withPreview ? await peek(paneId) : [],
+      preview: light ? [] : await peek(paneId),
+      context: light || !CLAUDE_COMMAND.test(row.command) ? null : await claudeContext(paneId, panePid, cwd),
     };
   }));
   return sessions.sort((a, b) => b.activity - a.activity);
@@ -783,6 +785,65 @@ async function newestTranscript(cwd) {
   const stats = await Promise.all(names.map((n) => fs.promises.stat(path.join(dir, n)).then((s) => ({ file: path.join(dir, n), mtime: s.mtimeMs }), () => null)));
   return stats.filter(Boolean).sort((a, b) => b.mtime - a.mtime)[0]?.file ?? null;
 }
+// This pane's own conversation when Claude says which it is (never another pane's: a conversation that has no file yet is
+// simply not there); the newest file of the directory only for a Claude that keeps no such record.
+async function paneTranscript(paneId, panePid, cwd) {
+  const mine = await paneConversation(paneId, panePid);
+  return mine ? transcriptOf(mine.sessionId, mine.cwd || cwd) : newestTranscript(cwd || '');
+}
+
+// How full a pane's Claude conversation is, for the session list: { tokens, window, model }, { compacted: true } or null. Claude Code's own meter
+// counts what the last request sent, input + cache read + cache write of the newest main-chain assistant message. The window
+// is not in the transcript: 1M for the Claude 5 models (TMUX_WEB_CONTEXT_1M, a pattern on the model id) and for anything
+// already past 200k, 200k otherwise. After a compaction the count is unknown until Claude answers again: { compacted: true }.
+// Only the end of the file is read (more of it until the message turns up), and the answer is kept until the file changes.
+const CONTEXT_1M = new RegExp(process.env.TMUX_WEB_CONTEXT_1M || '^claude-[a-z]+-(?:[5-9]|\\d\\d)(?:\\D|$)|\\[1m\\]', 'i');
+const CONTEXT_SCAN_MAX = 16 << 20;
+const contextCache = new Map(); // file -> { size, mtimeMs, context }, LRU of 64
+function lastUsage(text) {
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes('"usage"') && !lines[i].includes('"isCompactSummary"')) continue;
+    let rec;
+    try { rec = JSON.parse(lines[i]); } catch { continue; }
+    if (!isObject(rec) || rec.isSidechain) continue;
+    if (rec.isCompactSummary) return { compacted: true };
+    const used = rec.message?.usage;
+    const model = typeof rec.message?.model === 'string' ? rec.message.model : '';
+    if (rec.type !== 'assistant' || !isObject(used) || model === '<synthetic>') continue;
+    const tokens = [used.input_tokens, used.cache_creation_input_tokens, used.cache_read_input_tokens].reduce((sum, n) => sum + (Number.isFinite(n) ? n : 0), 0);
+    return { tokens, model };
+  }
+  return null;
+}
+async function claudeContext(paneId, panePid, cwd) {
+  let fh;
+  try {
+    const file = await paneTranscript(paneId, panePid, cwd);
+    if (!file) return null;
+    fh = await fs.promises.open(file, 'r');
+    const st = await fh.stat();
+    const known = contextCache.get(file);
+    if (known && known.size === st.size && known.mtimeMs === st.mtimeMs) return known.context;
+    let found = null;
+    for (let want = 256 << 10; ; want *= 4) {
+      const from = Math.max(0, st.size - want);
+      const buf = Buffer.alloc(st.size - from);
+      const { bytesRead } = await fh.read(buf, 0, buf.length, from);
+      let text = buf.toString('utf8', 0, bytesRead);
+      if (from > 0) { const nl = text.indexOf('\n'); text = nl < 0 ? '' : text.slice(nl + 1); } // starts mid-line
+      text = text.slice(0, text.lastIndexOf('\n') + 1); // Claude may be mid-write
+      found = lastUsage(text);
+      if (found || from === 0 || want >= CONTEXT_SCAN_MAX) break;
+    }
+    const context = !found ? null : found.compacted ? { compacted: true }
+      : { tokens: found.tokens, window: CONTEXT_1M.test(found.model) || found.tokens > 200_000 ? 1_000_000 : 200_000, model: found.model };
+    contextCache.delete(file);
+    contextCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, context });
+    while (contextCache.size > 64) contextCache.delete(contextCache.keys().next().value);
+    return context;
+  } catch { return null; } finally { await fh?.close(); }
+}
 
 // GET /api/sessions/:id/transcript -> { id, session, file, total, start, items, busy, asking }
 //   session = tmux session name; file = the transcript's jsonl name (indexes are only valid within one file,
@@ -815,10 +876,7 @@ async function sessionTranscript(id, query) {
     throw e;
   }
   if (!CLAUDE_COMMAND.test(command || '')) return { status: 404, body: { error: 'no Claude conversation in this session' } };
-  // This pane's own conversation when Claude says which it is (never another pane's: a conversation that has no file yet is
-  // simply not there); the newest file of the directory only for a Claude that keeps no such record.
-  const mine = await paneConversation(pane, +panePid);
-  const file = mine ? await transcriptOf(mine.sessionId, mine.cwd || cwd) : await newestTranscript(cwd || '');
+  const file = await paneTranscript(pane, +panePid, cwd);
   if (!file) return { status: 404, body: { error: 'no Claude transcript found' } };
   const entry = claudeEntry(file);
   const run = entry.chain.then(() => advance(entry, file));
@@ -1043,6 +1101,101 @@ function cancelUpload(req, user, id) {
   return { status: 200, body: { ok: true } };
 }
 
+// ---- Claude plan usage: how much of this account's 5-hour and weekly limits is left, and how it went
+// What Claude Code's /usage shows: GET api.anthropic.com/api/oauth/usage with the OAuth access token of this account's Claude
+// login (~/.claude/.credentials.json). It is asked every 5 minutes, and when a page wants it and the last try is over 2 minutes
+// old; the answers of the last 8 days are kept in TMUX_WEB_USAGE for the trend. The login is never refreshed here (that would
+// rotate the refresh token under Claude Code, which refreshes it while it runs): while it is expired the last answer stands.
+const CLAUDE_CREDENTIALS = process.env.TMUX_WEB_CLAUDE_CREDENTIALS || path.join(path.dirname(CLAUDE_PROJECTS), '.credentials.json');
+const USAGE_URL = process.env.TMUX_WEB_USAGE_URL || 'https://api.anthropic.com/api/oauth/usage';
+const USAGE_FILE = process.env.TMUX_WEB_USAGE || path.join(os.homedir(), '.local', 'state', 'tmux-web', 'usage.json');
+const USAGE_EVERY = 5 * 60_000;
+const USAGE_FRESH = 2 * 60_000;
+const USAGE_KEEP = 8 * 86400;
+// samples: [time, 5-hour %, weekly %, 5-hour reset, weekly reset] in seconds, a % or reset null when the answer had none
+const usage = { samples: null, error: null, tried: 0, pausedUntil: 0, inflight: null };
+function usageSamples() {
+  if (!usage.samples) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8'))?.samples;
+      usage.samples = Array.isArray(saved) ? saved.filter((s) => Array.isArray(s) && s.length === 5 && Number.isFinite(s[0])) : [];
+    } catch { usage.samples = []; }
+  }
+  return usage.samples;
+}
+function claudeToken() {
+  let oauth;
+  try { oauth = JSON.parse(fs.readFileSync(CLAUDE_CREDENTIALS, 'utf8'))?.claudeAiOauth; } catch (e) { return { error: e.code === 'ENOENT' ? 'not signed in' : 'unreadable login' }; }
+  if (typeof oauth?.accessToken !== 'string' || !oauth.accessToken) return { error: 'not signed in' };
+  if (Number.isFinite(oauth.expiresAt) && oauth.expiresAt < Date.now() + 30_000) return { error: 'login expired' };
+  return { token: oauth.accessToken };
+}
+const limitOf = (v) => {
+  if (!isObject(v) || !Number.isFinite(v.utilization)) return null;
+  const reset = Date.parse(v.resets_at);
+  return { used: Math.min(100, Math.max(0, v.utilization)), resetsAt: Number.isFinite(reset) ? Math.round(reset / 1000) : null };
+};
+function saveUsage(samples) {
+  try {
+    fs.mkdirSync(path.dirname(USAGE_FILE), { recursive: true, mode: 0o700 });
+    const temp = `${USAGE_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(temp, `${JSON.stringify({ samples })}\n`, { mode: 0o600 });
+    fs.renameSync(temp, USAGE_FILE);
+  } catch (e) { logOnce(`[tmux-web] could not save Claude usage: ${e.message}`); }
+}
+function pollUsage() {
+  if (usage.inflight) return usage.inflight;
+  if (Date.now() < usage.pausedUntil) return Promise.resolve();
+  usage.tried = Date.now();
+  usage.inflight = (async () => {
+    const { token, error } = claudeToken();
+    if (!token) { usage.error = error; return; }
+    try {
+      const res = await fetch(USAGE_URL, { headers: { authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+      if (res.status === 429) {
+        const wait = +res.headers.get('retry-after');
+        usage.pausedUntil = Date.now() + (wait > 0 ? Math.min(wait, 3600) * 1000 : 15 * 60_000);
+        usage.error = 'rate limited';
+        return;
+      }
+      if (res.status === 401 || res.status === 403) { usage.error = 'login expired'; return; }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json();
+      const five = limitOf(body?.five_hour);
+      const week = limitOf(body?.seven_day);
+      if (!five && !week) throw new Error('no limits in the answer');
+      const now = Math.floor(Date.now() / 1000);
+      usage.samples = usageSamples().filter((s) => s[0] > now - USAGE_KEEP);
+      usage.samples.push([now, five?.used ?? null, week?.used ?? null, five?.resetsAt ?? null, week?.resetsAt ?? null]);
+      usage.error = null;
+      saveUsage(usage.samples);
+    } catch (e) {
+      usage.error = 'unreachable';
+      logOnce(`[tmux-web] Claude usage: ${e.message}`);
+    }
+  })().finally(() => { usage.inflight = null; });
+  return usage.inflight;
+}
+// GET /api/usage -> { now, at, error, fiveHour: { used, resetsAt }, sevenDay, history: [[time, 5-hour %, weekly %], ...] }
+//   at: when the newest answer came (null: never, nothing to show); error: why the last try failed, null when it did not.
+//   used is a percentage; history covers 7 days, every answer of the last 6 hours and the last one of each half hour before.
+async function usageReport() {
+  if (Date.now() - usage.tried > USAGE_FRESH) await pollUsage();
+  const now = Math.floor(Date.now() / 1000);
+  const samples = usageSamples();
+  const history = [];
+  for (const [t, five, week] of samples) {
+    if (t < now - 7 * 86400) continue;
+    const prev = history.at(-1);
+    if (prev && t < now - 6 * 3600 && Math.floor(prev[0] / 1800) === Math.floor(t / 1800)) history[history.length - 1] = [t, five, week];
+    else history.push([t, five, week]);
+  }
+  const last = samples.at(-1);
+  return { status: 200, body: { now, at: last?.[0] ?? null, error: usage.error,
+    fiveHour: last?.[1] != null ? { used: last[1], resetsAt: last[3] } : null,
+    sevenDay: last?.[2] != null ? { used: last[2], resetsAt: last[4] } : null, history } };
+}
+
 // ---- HTTP
 function send(res, status, body, type = 'text/plain; charset=utf-8') {
   res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
@@ -1077,10 +1230,11 @@ const server = http.createServer(async (req, res) => {
     if (!mayEnter(user)) return sendJson(res, { status: 403, body: { error: `this is the ${ACCOUNT} account`, account: user.account } });
     if (pathname === '/api/sessions' && req.method === 'GET') {
       const specs = ownerSpecs(user, searchParams);
-      const sessions = await listSessions(user, specs, searchParams.get('preview') !== '0');
+      const sessions = await listSessions(user, specs, searchParams.get('preview') === '0');
       return sendJson(res, { status: 200, body: { now: Math.floor(Date.now() / 1000), account: ACCOUNT, owners: specs, sessions } });
     }
     if (pathname === '/api/sessions' && req.method === 'POST') return sendJson(res, await createSession(req, user));
+    if (pathname === '/api/usage' && req.method === 'GET') return sendJson(res, await usageReport());
     // every /api/sessions/:id... route: id syntax, method, then what this person may do with that session, and only then the body
     const sub = /^\/api\/sessions\/([^/]+)(?:\/(input|history|transcript|share))?$/.exec(pathname);
     if (sub) {
@@ -1110,7 +1264,7 @@ const server = http.createServer(async (req, res) => {
       if (upload[2]) return sendJson(res, await finishUpload(req, user, upload[1]));
       return sendJson(res, req.method === 'PUT' ? await uploadPiece(req, user, upload[1], searchParams) : cancelUpload(req, user, upload[1]));
     }
-    if (['/api/sessions', '/api/me', '/api/prefs', '/api/accounts', '/api/uploads', '/verify'].includes(pathname)) return send(res, 405, 'method not allowed');
+    if (['/api/sessions', '/api/me', '/api/prefs', '/api/accounts', '/api/uploads', '/api/usage', '/verify'].includes(pathname)) return send(res, 405, 'method not allowed');
     return send(res, 404, 'not found');
   } catch (e) {
     console.error('[tmux-web] handler error:', e.message);
@@ -1120,6 +1274,8 @@ const server = http.createServer(async (req, res) => {
 
 sweepUploads();
 setInterval(sweepUploads, 3600_000).unref();
+setTimeout(pollUsage, 3000).unref();
+setInterval(pollUsage, USAGE_EVERY).unref();
 fs.mkdirSync(path.dirname(SOCK), { recursive: true, mode: 0o700 });
 fs.rmSync(SOCK, { force: true });
 server.listen(SOCK, () => {

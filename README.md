@@ -56,10 +56,15 @@ On desktop, hold **Shift** while dragging to select terminal text (**Option** on
 use **Ctrl/Cmd+C** or the toolbar's **Copy** button. With no text selected, Ctrl+C still interrupts
 the running program. Right-click opens one local **Copy / Paste / Select all** menu; it does not
 also open a tmux menu. Clipboard buttons use the browser clipboard, with a native-copy fallback.
-The session list has **Preview lines** buttons for no preview, 1, 2, 5, 7, 10, 15, 20, 30, or 50 lines.
-The default is 7, and the selection is remembered per browser. The API supplies up to the last 50 nonempty
-output lines, including recent scrollback when the terminal is short. Long lines are truncated within
-each card so they cannot expand the page past the screen width.
+Above the session list, **− n +** sets how many preview lines each card shows (0, 1, 2, 3, 5, 7, 10, 15, 20, 30 or 50; the middle
+button hides the previews or brings them back). The default is 7, and the choice is remembered per browser. The API supplies up
+to the last 50 nonempty output lines, including recent scrollback when the terminal is short. Long lines are truncated within
+each card so they cannot expand the page past the screen width; a faded top line means there is more above.
+A Claude session's card shows how full its conversation is (a small bar: amber from 50 %, red from 80 %; hover for the tokens).
+The two rings in the header are what is left of the account's Claude **5-hour** and **weekly** limits. They open a panel with each
+window from its start to its reset: the usage so far, an even pace (the faint diagonal) and where the pace so far leads, with
+when it runs out if that comes before the reset. The panel starts open on a wide screen and closed on a phone; tapping the
+rings opens or closes it, and that choice is remembered per device kind.
 The Read view's **Aa** button opens a row with **Size** (A−/A+ or the slider, 80–500 %, scales everything in the text including code and
 tool steps) and **Width** (Normal 760 px, Wide 1100 px, Full).
 Display preferences (terminal font, Read size and width, and the view a Claude session opens in) are remembered per person
@@ -121,6 +126,17 @@ browser ─► Cloudflare Access (login) ─► cloudflared tunnel ─► Caddy 
   transcript costs about 1.5 s the first time and milliseconds afterwards.
   `TMUX_WEB_CLAUDE_COMMAND` (regex, default `claude`, case-insensitive) says which panes count as Claude;
   `TMUX_WEB_CLAUDE_PROJECTS` overrides `~/.claude/projects`.
+* `GET /api/sessions` gives each Claude session `context: {tokens, window, model}` (null otherwise, and with `?preview=0`):
+  input + cache read + cache write of the conversation's newest main-chain answer, read from the end of its transcript, against
+  a 1M window for the Claude 5 models (`TMUX_WEB_CONTEXT_1M`, a regex on the model id) or anything past 200k, else 200k. Right
+  after a compaction it is `{compacted: true}` until Claude answers again.
+* `GET /api/usage` returns `{now, at, error, fiveHour: {used, resetsAt}, sevenDay, history: [[time, 5-hour %, weekly %], ...]}`
+  for the account's own Claude login: what Claude Code's `/usage` shows, from `api.anthropic.com/api/oauth/usage` with the
+  access token in `~/.claude/.credentials.json` (`TMUX_WEB_CLAUDE_CREDENTIALS`). The API asks every 5 minutes, and when a page
+  wants it and the last try is over 2 minutes old; it keeps 8 days of answers for the trend in `TMUX_WEB_USAGE` (default
+  `~/.local/state/tmux-web/usage.json`, mode 600, no token in it). It never refreshes the login (that would rotate the refresh
+  token under Claude Code): while the token is expired, `error` says so and the last answer stands. A 429 pauses it as long as
+  `Retry-After` asks (15 minutes without one).
 * `POST /api/sessions/:id/input` types into the session's Claude pane: `{instance, text}` or `{instance, key}`. It needs the
   same Access token, matching Origin, JSON body and session `instance` as rename/close, and it refuses (409) any pane that is
   not running Claude, so it cannot be used as a general way to type into a shell. `text` is control-character-stripped (so pasted
@@ -337,7 +353,9 @@ confirmation, and survival of other sessions. `history.test.mjs` and `transcript
 → 404, two Claude panes in one directory each getting their own conversation; `TMUX_WEB_CLAUDE_COMMAND='^sleep$'` lets a `sleep` pane stand in for Claude). `input.test.mjs` drives a fake Claude terminal (bracketed paste on) to check exactly which bytes arrive. `users.test.mjs` covers ownership, the per-user list, the permission matrix on every route, `/verify` for terminals,
 config reloads, and multi-user being off without a users file. `accounts.test.mjs` runs a home and a personal account side by
 side: who may enter which, admins, sharing, `/api/accounts` and the switches, and refusing everything without a valid users file.
-`helpers.mjs` is the shared scaffolding.
+`usage.test.mjs` runs `/api/usage` against a stand-in for Anthropic: the request it makes, the history it keeps, and no login, an
+expired or refused one, a rate limit and an odd answer. `helpers.mjs` is the shared scaffolding; it points every test at its own
+Claude login file and an unreachable usage URL, so no test reads the real login or asks Anthropic.
 
 ## Vendored libraries
 

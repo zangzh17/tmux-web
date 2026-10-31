@@ -8,7 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <title>Tmux sessions</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="app.css?v=20261030-accounts">
+<link rel="stylesheet" href="app.css?v=20261031-usage">
 </head>
 <body>
 <main>
@@ -18,8 +18,15 @@
       <p class="muted" id="host"></p>
       <p class="muted" id="whoami" hidden></p>
     </div>
+    <button class="usage-pill" id="usage-pill" type="button" aria-expanded="false" aria-controls="usage-panel" hidden></button>
     <button class="icon-btn" id="refresh" type="button" aria-label="Refresh sessions" title="Refresh sessions">⟳</button>
   </header>
+  <section class="usage-panel" id="usage-panel" aria-label="Claude usage" hidden>
+    <div class="usage-inner">
+      <div class="usage-grid" id="usage-grid"></div>
+      <p class="usage-note" id="usage-note"></p>
+    </div>
+  </section>
   <section class="preview-controls account-bar" id="account-bar" aria-label="Accounts" hidden>
     <span class="preview-label" id="account-label">Account</span>
     <div class="account-options" id="account-options" role="group" aria-labelledby="account-label"></div>
@@ -37,25 +44,17 @@
     <p class="hint muted" id="name-hint">Start with an English letter or number. Use letters, numbers, - or _, up to 48 characters.</p>
     <p class="create-error" id="create-error" role="alert" hidden></p>
   </form>
-  <section class="preview-controls" id="preview-section" aria-label="Session preview settings">
-    <span class="preview-label" id="preview-label">Preview lines</span>
-    <div class="preview-options" id="preview-options" role="group" aria-labelledby="preview-label">
-      <button type="button" data-lines="0" aria-pressed="false">No preview</button>
-      <button type="button" data-lines="1" aria-pressed="false">1</button>
-      <button type="button" data-lines="2" aria-pressed="false">2</button>
-      <button type="button" data-lines="5" aria-pressed="false">5</button>
-      <button type="button" data-lines="7" aria-pressed="true">7</button>
-      <button type="button" data-lines="10" aria-pressed="false">10</button>
-      <button type="button" data-lines="15" aria-pressed="false">15</button>
-      <button type="button" data-lines="20" aria-pressed="false">20</button>
-      <button type="button" data-lines="30" aria-pressed="false">30</button>
-      <button type="button" data-lines="50" aria-pressed="false">50</button>
+  <div class="list-bar" id="list-bar">
+    <span class="list-title" id="list-title">Sessions</span>
+    <div class="owner-filter" id="owner-filter" hidden>
+      <div class="chips" id="owner-options" role="group" aria-label="Show sessions from"></div>
     </div>
-  </section>
-  <section class="preview-controls owner-filter" id="owner-filter" aria-label="Whose sessions to show" hidden>
-    <span class="preview-label" id="owner-label">Show sessions from</span>
-    <div class="preview-options" id="owner-options" role="group" aria-labelledby="owner-label"></div>
-  </section>
+    <div class="preview-step" role="group" aria-label="Preview lines">
+      <button type="button" id="preview-less" aria-label="Fewer preview lines" title="Fewer preview lines">−</button>
+      <button type="button" id="preview-toggle"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h8"/></svg><span id="preview-value">7</span></button>
+      <button type="button" id="preview-more" aria-label="More preview lines" title="More preview lines">+</button>
+    </div>
+  </div>
   <div class="notice" id="notice" role="alert" hidden></div>
   <ul class="list" id="list" aria-live="polite"><li class="skeleton"></li><li class="skeleton"></li></ul>
   <p class="foot muted">Click a session to open it. Going back or closing this page keeps it running. Use the pencil to rename a session, or Close and confirm to end it.</p>
@@ -91,6 +90,6 @@
     <button id="close-confirm" class="confirm" type="button">Close session</button>
   </div>
 </dialog>
-<script src="index.js?v=20261030-accounts"></script>
+<script src="index.js?v=20261031-usage"></script>
 </body>
 </html>
