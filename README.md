@@ -7,8 +7,10 @@ disconnects it (the ttyd ping handles abrupt network loss). The tmux session kee
 Inside a session, tap its title to edit the name; Enter or blur saves automatically, and Escape cancels.
 **Read** (book icon) opens a read-only reading view with native scrolling, wrapping and text selection; the live terminal
 keeps running underneath. **Copy** (next to it) opens an editable copy of the text instead (below). On a phone the
-header buttons are icons only and always stay on one row; the toolbar of the view is icons too: Files, Scratch, Render (eye),
-Copy, Aa, Refresh, and **Done** (a word, so it is not taken for the session's Close). It exists because the live terminal has no usable history for Claude Code (it runs on tmux's
+header buttons are icons only and always stay on one row (when they do not fit, the row scrolls sideways and fades at the edge
+that has more; on a phone the rarely used A−, A+ and Close come last); the toolbar of the view is icons too: Files, Scratch,
+Copy, Aa, Refresh, which scroll the same way, and **Done** (a word, so it is not taken for the session's Close), which never scrolls
+away. It exists because the live terminal has no usable history for Claude Code (it runs on tmux's
 alternate screen, so `history_size` is 0, and it draws at the width it had when it printed).
 
 **Opening a session that runs Claude starts in this view**, with Render on: the page checks the foreground command (and, failing
@@ -26,7 +28,8 @@ terminal and it stays there until the page is opened again; a plain shell opens 
   and consecutive tool calls/results folded into one `N steps · Bash ×2 · Read` capsule (red if a result failed; expand for
   the command and a folded result). Slash commands, `/compact` summaries and interruptions get their own small markers.
   It opens at the newest message; scroll up to load earlier ones (150 at a time), tap **Refresh** for new ones.
-  **Render** is on every time Read opens; the eye button switches Markdown/math/highlighting off for the view that is open.
+  **Render** is on every time Read opens; **View: Rendered** in the Aa panel switches Markdown/math/highlighting off for the view
+  that is open (it used to be an eye button in the toolbar, too easily taken for the way out).
 * **Copy** (on the terminal page's header, in the Read view's toolbar, and in the scratch terminal) opens a sheet like the
   scratch terminal's with an editable text box: change, cut and select freely, then **Copy selection** or **Copy all**; nothing
   typed there reaches a terminal, and the key bar is off while it is open. The text comes from the **Terminal** (tmux's scrollback,
@@ -36,7 +39,12 @@ terminal and it stays there until the page is opened again; a plain shell opens 
   Claude session and in the Read view. Wrap (long lines), Reload (the text again, edits gone), taller/shorter.
   In a pane that is not Claude it shows the tmux scrollback, as Read does.
 * **You can answer from here.** In a Claude conversation a message box sits under the text. On a computer Enter sends and
-  Shift+Enter starts a new line; on a phone Enter is a new line and **Send** sends. Your message shows dimmed
+  Shift+Enter starts a new line; on a phone Enter is a new line and **Send** sends. On a phone, while you write (the box focused,
+  or not empty) the box takes the whole width and its buttons move to a row under it. The box grows with the text up to what the
+  keyboard leaves (the heading, open panels and a strip of the conversation stay), and the line with the caret stays in view.
+  The ⤢ button opens a **full-screen editor**: only the message, under one bar with **Conversation** (back, the message kept, at
+  the place you were reading), the character count, Upload and Send; sending from it goes back to the conversation at the end.
+  Esc on a keyboard leaves the editor first. Your message shows dimmed
   ("Sending…") until Claude's transcript has it, and the answer streams in by itself (the view polls every 1–2.5 s while it is
   open and the tab is visible). While Claude is running a one-line **Working…** row shows with **Stop** (sends Esc) and
   **Screen** (opens Screen & keys; on narrow phones the row drops the words "Claude is" so it never wraps). If you have scrolled
@@ -328,7 +336,7 @@ running across API restarts; the systemd default would terminate every session i
 
 ## Phone notes
 
-* Key bar (phone, two rows of seven with Enter down the right edge): Esc, the commands key (`>_`), Tab, ^U, ↑ ↓, ⌫ /
+* Key bar (phone, two rows of seven with Enter, shown as ⏎, down the right edge): Esc, the commands key (`>_`), Tab, ^U, ↑ ↓, ⌫ /
   ^A, ← →, ^E, |, /, ~ (^A start of line, ^E end, ^U clear back to the start). Up/down and left/right are two colours and never
   one pair right above the other. On a touch screen ← or → held opens a small row of **×5 ×10 ×20** over the key: slide onto
   one and let go, or let go and tap one. Desktop: the same keys in one row. Tablet: bigger keys, plus ^C, **Send now** (Claude Code's
@@ -345,7 +353,11 @@ running across API restarts; the systemd default would terminate every session i
   Arrows and page keys repeat when held without moving.
   The outlined keyboard icon and **Key bar** label toggle it; the highlighted state means it is visible.
 * When the phone keyboard opens or vertical space is short, the header becomes one compact row
-  and the key bar becomes one horizontally scrollable row. The terminal refits to the visual viewport.
+  and the key bar becomes one horizontally scrollable row. The terminal refits to the visual viewport. The keyboard is told
+  from a turned screen by comparing heights at the same width (an iPad turned on its side stays in the normal layout), and while it
+  is up the home-indicator inset is not kept free (it is under the keyboard). With a short view and the keyboard up, Screen & keys
+  shows only its keys while you type.
+* Every button on a touch screen is at least about 36–44 px; the Read view's Detach is a 44 px target set apart from the tools.
 * If the keyboard (plus iOS's AutoFill bar and Safari's bars, or a zoomed page) leaves the terminal fewer than 13 rows, Claude
   Code may not fit its screen (its bottom block alone is 8-10 rows in a long session): its input line falls off the bottom and the cursor ends up on the rule under it. In that case the
   title bar folds away, the key bar slims down and, only if still needed, the font shrinks in half-pixel steps (never below 9px; the saved size is

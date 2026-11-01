@@ -47,7 +47,7 @@ h1 { margin: 0; font-size: 1.25rem; line-height: 1.25; letter-spacing: -0.01em; 
 .create button:disabled { opacity: 0.6; cursor: wait; }
 .hint { margin: 8px 0 0; font-size: 0.78rem; }
 .create-error { margin: 8px 0 0; color: #dc2626; font-size: 0.85rem; }
-@media (max-width: 380px) { .create-row { flex-direction: column; } }
+@media (max-width: 380px) { .create-row { flex-direction: column; } .create input, .create button { flex: none; } } /* flex: 1 in a column squashed the box to 24px */
 .preview-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
 .preview-label { font-size: 0.9rem; font-weight: 650; }
 /* the bar above the list: whose sessions (chips that scroll sideways on a phone) and how many preview lines (− n +) */
@@ -241,3 +241,15 @@ body.off #create, body.off #list-bar, body.off #list, body.off .foot, body.off #
 .u-foot .alarm { color: var(--sev); font-weight: 600; }
 .usage-note { margin: 6px 2px 0; color: var(--muted); font-size: 0.72rem; text-align: right; }
 .usage-note:empty { display: none; }
+/* touch screens: buttons a fingertip can hit without catching the one next to it */
+@media (pointer: coarse) {
+  .chips button { height: 36px; padding: 0 14px; }
+  .preview-step { height: 36px; }
+  .preview-step button { min-width: 40px; }
+  .session-rename, .session-share { width: 40px; min-height: 40px; }
+  .session-close { min-height: 40px; padding: 0 12px; }
+  .session-card .row { padding-right: 122px; }
+  .session-card.shareable .row { padding-right: 168px; }
+  .icon-btn { width: 42px; height: 42px; }
+}
+

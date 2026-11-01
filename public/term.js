@@ -90,7 +90,10 @@
 
   // ---- keep #app on the visual viewport (iOS keyboard shifts / doesn't resize the layout viewport)
   const vv = window.visualViewport;
-  let fullViewportHeight = vv ? vv.height : innerHeight;
+  // The tallest viewport seen at each width: the keyboard takes height, never width, so a phone turned on its side (or an iPad
+  // turned) is not mistaken for one with the keyboard up, as a single maximum over both orientations did.
+  const fullAt = new Map();
+  const viewportHooks = []; // run after every change (the Read view's message box sizes itself to the room left)
   let seenViewport = '';
   let lastHeight = vv ? vv.height : innerHeight;
   const syncViewport = () => {
@@ -102,12 +105,19 @@
     // Stay as laid out until the zoom goes back to 1.
     if (vv && vv.scale > 1.01) return;
     if (Math.abs(height - lastHeight) > 2) { lastHeight = height; layoutFixes = 0; layoutBoost = 0; } // a new situation: start the symptom check afresh
-    fullViewportHeight = Math.max(fullViewportHeight, height);
-    document.getElementById('app').classList.toggle('compact', coarse && (height <= 500 || fullViewportHeight - height > 140));
+    const width = Math.round(innerWidth);
+    const full = Math.max(fullAt.get(width) || 0, height);
+    fullAt.set(width, full);
+    // The on-screen keyboard is up: iOS shrinks only the visual viewport (innerHeight keeps the full height), Android with
+    // resizes-content shrinks both. Then the home-indicator inset is under the keyboard and the page need not keep it free.
+    document.documentElement.classList.toggle('kbd', coarse && (innerHeight - height > 120 || full - height > 140));
+    document.documentElement.classList.toggle('short', coarse && height < 360);
+    document.getElementById('app').classList.toggle('compact', coarse && (height <= 500 || full - height > 140));
     root.setProperty('--vh', `${height}px`);
     root.setProperty('--vt', `${vv ? vv.offsetTop : 0}px`);
     if (!vv || vv.offsetTop) window.scrollTo(0, 0);
     requestAnimationFrame(layoutTerminal);
+    for (const hook of viewportHooks) requestAnimationFrame(hook);
   };
   if (vv) { vv.addEventListener('resize', syncViewport); vv.addEventListener('scroll', syncViewport); }
   addEventListener('resize', syncViewport);
@@ -724,9 +734,79 @@
     syncSend();
   }
   const syncSend = () => { $composerSend.disabled = sending || $composerInput.disabled || !$composerInput.value.trim(); };
+  // The message box grows with its text up to the room the screen leaves it: the heading, the open panels and a strip of the
+  // conversation stay, and the box's bottom never goes under the keyboard (iOS keeps innerHeight when the keyboard is up, so
+  // the old 32 % of innerHeight could be taller than everything above the keyboard: the end of a long message was out of sight).
+  // Its natural height comes from a hidden twin, so the box itself never collapses to one line and back while typing.
+  const twin = document.createElement('textarea');
+  twin.setAttribute('aria-hidden', 'true');
+  twin.tabIndex = -1;
+  twin.disabled = true; // never a stop for iOS's previous/next field buttons
+  twin.style.cssText = 'position:fixed;left:-10000px;top:0;visibility:hidden;height:0;min-height:0;max-height:none;overflow:hidden;resize:none;pointer-events:none';
+  document.body.append(twin);
+  const TWIN_STYLE = ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing', 'wordSpacing', 'textTransform', 'tabSize', 'whiteSpace', 'overflowWrap', 'wordBreak',
+    'boxSizing', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'borderStyle'];
+  function fitTwin() { // the twin wraps exactly as the box does (its width without a scroll bar)
+    const cs = getComputedStyle($composerInput);
+    for (const p of TWIN_STYLE) twin.style[p] = cs[p];
+    twin.style.width = `${$composerInput.clientWidth + parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth)}px`;
+    return cs;
+  }
+  const isEditing = () => $textDialog.classList.contains('editing');
+  function composerRoom(writing) {
+    const cs = getComputedStyle($textDialog);
+    const inner = $textDialog.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    let used = $composer.offsetHeight - $composerInput.offsetHeight;
+    for (const child of $textDialog.children) if (child !== $textScroll && child !== $composer) used += child.offsetHeight;
+    // Writing, the conversation keeps a strip of about three lines; otherwise the box takes at most 40 % of the view.
+    const keep = writing ? Math.min(84, inner * 0.2) : inner * 0.6;
+    return Math.max(44, Math.floor(inner - used - keep));
+  }
   function autoGrow() {
-    $composerInput.style.height = 'auto';
-    $composerInput.style.height = `${Math.min($composerInput.scrollHeight + 2, Math.round(innerHeight * 0.32))}px`;
+    syncWriting();
+    if (!$textDialog.open || $composer.hidden || isEditing()) { $composerInput.style.height = ''; keepCaret(); return; }
+    const cs = fitTwin();
+    twin.value = $composerInput.value || 'x';
+    const natural = twin.scrollHeight + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+    const height = Math.max(44, Math.min(Math.ceil(natural), composerRoom(document.activeElement === $composerInput)));
+    if ($composerInput.style.height !== `${height}px`) $composerInput.style.height = `${height}px`;
+    keepCaret();
+  }
+  // After the box changed size (or the keyboard came up), the line with the caret is scrolled back into the box.
+  function keepCaret() {
+    const t = $composerInput;
+    if (document.activeElement !== t || t.scrollHeight <= t.clientHeight) return;
+    const cs = fitTwin();
+    twin.value = `${t.value.slice(0, t.selectionEnd)}\u200b`;
+    const padTop = parseFloat(cs.paddingTop), padBottom = parseFloat(cs.paddingBottom), line = parseFloat(cs.lineHeight) || 22;
+    const bottom = twin.scrollHeight - padBottom; // where the caret's line ends, in the box's own coordinates
+    if (bottom > t.scrollTop + t.clientHeight - padBottom) t.scrollTop = bottom - t.clientHeight + padBottom;
+    else if (bottom - line < t.scrollTop + padTop) t.scrollTop = Math.max(0, bottom - line - padTop);
+  }
+  // A phone gives the box the whole width while a message is being written (focused, or not empty): see #composer.writing.
+  function syncWriting() { $composer.classList.toggle('writing', document.activeElement === $composerInput || $composerInput.value !== ''); }
+  // The full-screen editor: the message and its buttons take the whole view; the conversation's place is kept for coming back.
+  const $editorBar = document.getElementById('editor-bar');
+  const $composerCount = document.getElementById('composer-count');
+  let editorReturn = null;
+  function countChars() {
+    if ($editorBar.hidden) return;
+    const n = $composerInput.value.length;
+    $composerCount.textContent = n ? `${n.toLocaleString('en-US')} char${n === 1 ? '' : 's'}` : '';
+  }
+  function setEditor(on) {
+    if (on === isEditing()) return;
+    if (on) editorReturn = { top: $textScroll.scrollTop, bottom: nearBottom() };
+    $textDialog.classList.toggle('editing', on);
+    $editorBar.hidden = !on;
+    countChars();
+    if (on) $composerInput.focus({ preventScroll: true });
+    autoGrow();
+    if (!on && editorReturn) {
+      const back = editorReturn;
+      editorReturn = null;
+      if (back.bottom) toBottom(); else { programmaticUntil = performance.now() + 200; $textScroll.scrollTop = back.top; }
+    }
   }
   function composerError(message) { $composerError.textContent = message; $composerError.hidden = false; }
   async function postInput(body) {
@@ -759,6 +839,7 @@
       await postInput({ text });
       entry.sent = true;
       $composerInput.value = '';
+      if (isEditing()) { editorReturn = { bottom: true }; setEditor(false); } // back to the conversation, at the message just sent
       autoGrow();
       fastUntil = Date.now() + 10000;
       pollSoon(500);
@@ -821,15 +902,19 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden && mode === 'chat' && $textDialog.open) pollSoon(0); });
 
   // Keyboard and taps: Enter sends on desktop; on a phone Enter is a new line and Send sends.
-  $composerInput.addEventListener('input', () => { autoGrow(); syncSend(); $composerError.hidden = true; });
+  $composerInput.addEventListener('input', () => { autoGrow(); syncSend(); countChars(); $composerError.hidden = true; });
   $composerInput.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter' || event.isComposing || event.shiftKey) return;
     if (coarse && !event.ctrlKey && !event.metaKey) return;
     event.preventDefault();
     void sendMessage();
   });
-  $composerInput.addEventListener('focus', () => { $textDialog.classList.add('typing'); });
-  $composerInput.addEventListener('blur', () => { $textDialog.classList.remove('typing'); });
+  $composerInput.addEventListener('focus', () => { $textDialog.classList.add('typing'); autoGrow(); });
+  $composerInput.addEventListener('blur', () => { $textDialog.classList.remove('typing'); autoGrow(); });
+  document.getElementById('composer-expand').addEventListener('click', () => setEditor(true));
+  document.getElementById('composer-collapse').addEventListener('click', () => setEditor(false));
+  $textDialog.addEventListener('cancel', (event) => { if (isEditing()) { event.preventDefault(); setEditor(false); } }); // Esc: out of the editor first
+  viewportHooks.push(() => { if ($textDialog.open) autoGrow(); });
   $composerSend.addEventListener('click', () => { void sendMessage(); });
   $peekToggle.addEventListener('click', () => setPeek(!peekOpen));
   document.getElementById('working-screen').addEventListener('click', () => setPeek(!peekOpen)); // shows the screen, and hides it again
@@ -848,7 +933,8 @@
     if (key) void sendKey(key);
   });
   // Tapping these must not take focus from the message box, or the keyboard drops and the layout jumps under the finger.
-  for (const node of [$composerSend, $peekToggle, $peekKeys, $jump, document.getElementById('working-stop'), document.getElementById('working-screen'), $workingNow]) {
+  for (const node of [$composerSend, $peekToggle, $peekKeys, $jump, document.getElementById('working-stop'), document.getElementById('working-screen'), $workingNow,
+    document.getElementById('composer-expand'), document.getElementById('composer-collapse')]) {
     node.addEventListener('pointerdown', (event) => event.preventDefault());
   }
 
@@ -901,7 +987,7 @@
   }
   $fmtPanel.addEventListener('click', (event) => {
     const button = event.target.closest('button');
-    if (!button) return;
+    if (!button || button === $textRender) return;
     changeReadFormat(() => {
       if (button.dataset.scale) readScale = SCALES[Math.min(SCALES.length - 1, Math.max(0, SCALES.indexOf(readScale) + +button.dataset.scale))];
       if (button.dataset.width) readWidth = button.dataset.width;
@@ -912,6 +998,10 @@
   // Taps here must not take focus from the message box either.
   for (const node of [$fmt, $fmtPanel]) node.addEventListener('pointerdown', (event) => { if (event.target.closest('button')) event.preventDefault(); });
   applyReadFormat();
+  { // anything that takes height in the Read view changes the room left for the message box
+    const watch = new ResizeObserver(() => { if ($textDialog.open) autoGrow(); });
+    for (const node of [$textDialog, document.querySelector('.text-heading'), $fmtPanel, $textStatus, $textInstruction, $peek, $composerError]) watch.observe(node);
+  }
   addEventListener('orientationchange', applyReadFormat);
   screen.orientation?.addEventListener?.('change', applyReadFormat);
 
@@ -940,8 +1030,10 @@
     $jump.hidden = true;
     $composerError.hidden = true;
     $composerInput.value = '';
+    $textDialog.classList.remove('typing', 'editing');
+    $editorBar.hidden = true;
+    editorReturn = null;
     autoGrow();
-    $textDialog.classList.remove('typing');
     const range = window.getSelection();
     if ($textOutput.contains(range?.anchorNode)) range.removeAllRanges();
     $textOutput.replaceChildren();
@@ -1522,7 +1614,7 @@
     // Claude Code's chat:sendNow chord: a message queued while Claude works is sent at once, interrupting the turn
     now: { l: 'Send now', s: '\x18\x13', cls: 'now', only: 'claude', title: 'Send now (Ctrl+X Ctrl+S): Claude sends the queued message at once, interrupting its turn' },
     pipe: { l: '|', s: '|' }, slash: { l: '/', s: '/' }, tilde: { l: '~', s: '~' },
-    enter: { l: 'Enter', s: '\r', cls: 'enter', title: 'Enter' },
+    enter: { l: DEVICE === 'phone' ? '⏎' : 'Enter', s: '\r', cls: 'enter', title: 'Enter' }, // a phone's key is too narrow for the word
     pgup: { svg: '<path d="m7 11 5-5 5 5M7 18l5-5 5 5"/>', s: '\x1b[5~', rep: 1, title: 'Page up' },
     pgdn: { svg: '<path d="m7 6 5 5 5-5M7 13l5 5 5-5"/>', s: '\x1b[6~', rep: 1, title: 'Page down' },
   };
@@ -1674,7 +1766,22 @@
     return b;
   }
   $keys.classList.add(DEVICE);
-  document.getElementById('app').classList.add(`dev-${DEVICE}`);
+  document.documentElement.classList.add(`dev-${DEVICE}`); // on <html>: the dialogs outside #app follow it too
+  // A row of buttons that scrolls sideways when it does not fit: a fade on the edge that has more (see .more-left/.more-right).
+  function edgeFade(box) {
+    const update = () => {
+      const max = box.scrollWidth - box.clientWidth;
+      box.classList.toggle('more-left', max > 1 && box.scrollLeft > 1);
+      box.classList.toggle('more-right', max > 1 && box.scrollLeft < max - 1);
+    };
+    box.addEventListener('scroll', update, { passive: true });
+    new ResizeObserver(update).observe(box);
+    new MutationObserver(update).observe(box, { subtree: true, attributes: true, attributeFilter: ['hidden'] });
+    update();
+  }
+  edgeFade(document.querySelector('header .tools'));
+  edgeFade(document.getElementById('text-tools'));
+  edgeFade(document.getElementById('peek-keys'));
   if (BAR.pad) {
     const main = Object.assign(document.createElement('div'), { className: 'kmain' });
     const pad = Object.assign(document.createElement('div'), { className: 'dpad' });

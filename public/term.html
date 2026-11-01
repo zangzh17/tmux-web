@@ -32,7 +32,14 @@
   #title svg { flex: none; width: 15px; height: 15px; color: var(--muted); }
   #title-input { width: 100%; min-width: 0; height: 36px; padding: 0 8px; border: 1px solid var(--accent); border-radius: 8px; background: var(--bg); color: var(--text); font: 16px/1.2 system-ui, sans-serif; }
   #title-input[aria-invalid="true"] { border-color: var(--danger); }
-  .tools { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; min-width: 0; gap: 4px; }
+  /* the buttons scroll sideways when they do not fit (a fade at the edge shows there is more), never cut off or wrapped.
+     The ::before spacer pushes them right while there is room; an auto margin, unlike justify-content, keeps the overflow scrollable. */
+  .tools { display: flex; flex-wrap: nowrap; align-items: center; min-width: 0; gap: 4px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .tools::before { content: ''; order: -1; margin-left: auto; }
+  .tools::-webkit-scrollbar, .text-tools::-webkit-scrollbar { display: none; }
+  .more-right { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 26px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 26px), transparent); }
+  .more-left { -webkit-mask-image: linear-gradient(90deg, transparent, #000 26px); mask-image: linear-gradient(90deg, transparent, #000 26px); }
+  .more-left.more-right { -webkit-mask-image: linear-gradient(90deg, transparent, #000 26px, #000 calc(100% - 26px), transparent); mask-image: linear-gradient(90deg, transparent, #000 26px, #000 calc(100% - 26px), transparent); }
   .hbtn { display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 5px; min-width: 34px; height: 36px; padding: 0 7px; border: 1px solid var(--line); border-radius: 9px; background: var(--key); font: 500 14px/1 system-ui, sans-serif; white-space: nowrap; cursor: pointer; }
   .hbtn svg { width: 18px; height: 18px; flex: none; }
   .hbtn:active { background: var(--key-on); }
@@ -136,19 +143,18 @@
   #selection-hint { max-width: 230px; margin: 5px 10px 4px; color: var(--muted); font-size: 12px; line-height: 1.4; }
   #text-dialog { position: fixed; inset: auto; top: var(--vt, 0px); left: 0; width: 100%; max-width: none; height: var(--vh, 100dvh); max-height: none; margin: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); border: 0; border-radius: 0; background: var(--bg); }
   #text-dialog[open] { display: flex; flex-direction: column; overflow: hidden; }
-  .text-heading { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 12px; background: var(--bar); border-bottom: 1px solid var(--line); }
+  .text-heading { flex: none; display: flex; align-items: center; gap: 10px; padding: 4px 8px 4px 4px; background: var(--bar); border-bottom: 1px solid var(--line); }
   #text-heading { margin: 0; font-size: 17px; } /* screen readers only (.sr-only): the visible top-left control is Detach */
-  .text-back { display: inline-flex; flex: none; align-items: center; gap: 1px; min-height: 34px; padding: 0 10px 0 4px; border-radius: 10px; color: var(--accent); font: 600 15px/1 system-ui, -apple-system, sans-serif; text-decoration: none; white-space: nowrap; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
-  .text-back svg { width: 20px; height: 20px; }
+  .text-back { display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 1px; min-width: 44px; min-height: 40px; padding: 0 10px 0 4px; border-radius: 10px; color: var(--accent); font: 600 15px/1 system-ui, -apple-system, sans-serif; text-decoration: none; white-space: nowrap; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .text-back svg { width: 22px; height: 22px; }
   .text-back:hover { background: var(--key); }
   .text-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .text-tools { flex: none; display: flex; gap: 6px; }
-  #text-dialog .text-tools button { min-width: 40px; min-height: 34px; padding: 0; }
+  .text-tools { flex: 1 1 auto; min-width: 0; display: flex; gap: 6px; padding: 2px 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .text-tools > :first-child { margin-left: auto; }
+  #text-dialog .text-tools button { flex: none; min-width: 40px; min-height: 40px; padding: 0; }
   .text-tools svg { width: 19px; height: 19px; }
-  #text-dialog #text-render[aria-pressed="true"], #text-dialog #text-view[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   /* the way back to the terminal: a word, not a ✕ (that is the session's Close on the terminal page), set apart from the toggles */
-  #text-dialog .text-tools #text-done { margin-left: 4px; padding: 0 12px; border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); color: var(--accent); font-weight: 650; }
-  @media (max-width: 480px) { #text-dialog .text-tools { gap: 4px; } #text-dialog .text-tools button { min-width: 37px; } #text-dialog .text-tools #text-done { margin-left: 2px; padding: 0 10px; } }
+  #text-dialog #text-done { flex: none; min-height: 40px; padding: 0 14px; border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); color: var(--accent); font-weight: 650; }
   #text-dialog button { min-height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--key); color: var(--text); font: 600 14px/1 system-ui, sans-serif; cursor: pointer; touch-action: manipulation; }
   #text-instruction { flex: none; padding: 8px 12px; font-size: 13px; line-height: 1.4; }
   #text-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 8px 12px; -webkit-overflow-scrolling: touch; }
@@ -173,8 +179,8 @@
   .fmt-label { margin-right: 2px; color: var(--muted); font: 12.5px/1 system-ui, -apple-system, sans-serif; }
   #text-dialog #text-fmt-panel button { min-width: 38px; min-height: 32px; padding: 0 9px; font-size: 13px; }
   #text-dialog #text-fmt-panel button[aria-pressed="true"], #text-dialog #text-fmt[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-  @media (max-width: 380px) { #text-dialog .text-tools { gap: 4px; } #text-dialog .text-tools button { min-width: 35px; } }
-  @media (max-width: 480px) { .text-back span { display: none; } .text-back { padding: 0 6px 0 2px; } }
+  @media (max-width: 480px) { .text-back span { display: none; } .text-back { padding: 0 2px 0 0; } }
+  .fmt-group:has(> #text-render[hidden]) { display: none; } /* the View switch is only for a conversation */
   #text-scale-range { width: min(240px, 46vw); accent-color: var(--accent); }
   #text-scale { min-width: 3.2em; color: var(--text); font: 600 13px/1 system-ui, sans-serif; text-align: center; font-variant-numeric: tabular-nums; }
   #text-output.raw { max-width: calc(var(--read-width) / var(--read-scale)); margin: 0 auto; padding: 2px 0 14px; font: 13.5px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, "PingFang SC", monospace; }
@@ -253,14 +259,48 @@
   /* ---- Read dialog: talk to Claude from the conversation view */
   #composer { flex: none; position: relative; padding: 8px 10px; background: var(--bar); border-top: 1px solid var(--line); }
   #text-dialog.typing #peek-screen { max-height: calc(var(--vh, 100dvh) * 0.16); } /* the keyboard is up: the heading must keep its room */
+  .short #text-dialog.typing #peek-screen { display: none; } /* a short view with the keyboard up (a phone on its side): the keys are enough */
+  .short .text-heading { padding-top: 2px; padding-bottom: 2px; }
+  #text-dialog.typing #peek-keys { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; } /* and the keys one row */
+  #peek-keys::-webkit-scrollbar { display: none; }
+  #text-dialog #peek-keys button { flex: none; }
   .composer-row { display: flex; align-items: flex-end; gap: 8px; max-width: var(--read-width); margin: 0 auto; }
-  #composer-input { flex: 1; min-width: 0; min-height: 44px; max-height: 32vh; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; resize: none; }
+  #composer-input { flex: 1; min-width: 0; min-height: 44px; padding: 10px 12px; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; resize: none; }
   #composer-input:focus { outline: none; border-color: var(--accent); }
   #composer-input::placeholder { color: var(--muted); }
   #text-dialog #composer-send { flex: none; min-width: 64px; border-color: var(--accent); background: var(--accent); color: #1f1e1d; }
   #text-dialog #composer-send:disabled { border-color: var(--line); background: var(--key); color: var(--muted); cursor: default; }
-  #text-dialog #peek-toggle, #text-dialog #composer-attach { flex: none; width: 44px; padding: 0; }
-  #peek-toggle svg, #composer-attach svg { width: 20px; height: 20px; }
+  #text-dialog #peek-toggle, #text-dialog #composer-attach, #text-dialog #composer-expand { flex: none; width: 44px; padding: 0; }
+  #peek-toggle svg, #composer-attach svg, #composer-expand svg { width: 20px; height: 20px; }
+  /* A phone writing a message (the box focused, or text in it): the box gets the whole width, its buttons a row under it.
+     Idle, it is one row. term.js sizes the box to what the keyboard leaves (autoGrow), so its end is never under the keyboard. */
+  @media (max-width: 600px) {
+    #composer:not(.writing) #composer-expand { display: none; }
+    #composer.writing .composer-row { display: grid; grid-template-columns: auto auto 1fr auto auto; grid-template-areas: "input input input input input" "peek attach . expand send"; gap: 6px 8px; align-items: center; }
+    #composer.writing #composer-input { grid-area: input; }
+    #composer.writing #peek-toggle { grid-area: peek; } #composer.writing #composer-attach { grid-area: attach; }
+    #composer.writing #composer-expand { grid-area: expand; } #composer.writing #composer-send { grid-area: send; }
+    #text-dialog #composer.writing .composer-row > button { min-height: 40px; height: 40px; }
+    #composer.writing { padding-top: 6px; padding-bottom: 6px; }
+  }
+  /* the full-screen editor: only the message, under one bar (back to the conversation, its size, Upload, Send) as in a mail app */
+  #text-dialog.editing > :not(#composer) { display: none !important; }
+  #text-dialog.editing #peek, #text-dialog.editing #jump-new, #text-dialog.editing #peek-toggle, #text-dialog.editing #composer-expand { display: none !important; }
+  #text-dialog.editing #composer { flex: 1; min-height: 0; width: 100%; max-width: calc(var(--read-width) + 20px); margin: 0 auto; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-rows: auto auto minmax(0, 1fr); grid-template-areas: "collapse count attach send" "error error error error" "input input input input"; gap: 0 8px; align-items: center; padding: 6px 10px 8px; border-top: 0; background: var(--bg); }
+  #text-dialog.editing #editor-bar, #text-dialog.editing .composer-row { display: contents; }
+  #text-dialog.editing #composer-collapse { grid-area: collapse; } #text-dialog.editing #composer-count { grid-area: count; }
+  #text-dialog.editing #composer-attach { grid-area: attach; } #text-dialog.editing #composer-send { grid-area: send; }
+  #text-dialog.editing #composer-error { grid-area: error; margin: 6px 0 0; }
+  #text-dialog.editing #composer-input { grid-area: input; align-self: stretch; height: auto !important; min-height: 0; margin-top: 8px; }
+  #text-dialog.editing #composer button { min-height: 40px; height: 40px; }
+  #editor-bar[hidden] { display: none; }
+  #text-dialog #composer-collapse { display: inline-flex; align-items: center; gap: 4px; min-height: 40px; padding: 0 14px 0 8px; color: var(--accent); }
+  #composer-collapse svg { width: 20px; height: 20px; }
+  #composer-count { min-width: 0; overflow: hidden; color: var(--muted); font: 12.5px/1 system-ui, -apple-system, sans-serif; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 359px) { #composer-count { visibility: hidden; } }
+  /* the keyboard is up (term.js: .kbd): the home-indicator inset is under the keyboard, not under the page */
+  .kbd #text-dialog, .kbd #files-dialog, .kbd .sheet:modal { padding-bottom: 0; }
+  .kbd .copy-foot { padding-bottom: 7px; }
   #text-dialog #peek-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   #composer-error { max-width: var(--read-width); margin: 0 auto 6px; color: var(--danger); font-size: 13px; line-height: 1.4; }
   #peek { max-width: var(--read-width); margin: 0 auto 8px; }
@@ -273,45 +313,42 @@
   #working .spin { color: var(--accent); animation: working-pulse 1.4s ease-in-out infinite; }
   @keyframes working-pulse { 50% { opacity: 0.3; } }
   @media (prefers-reduced-motion: reduce) { #working .spin { animation: none; } }
-  #text-dialog #working button { flex: none; min-height: 30px; padding: 0 11px; font-size: 13px; }
+  #text-dialog #working button { flex: none; min-height: 34px; padding: 0 12px; font-size: 13px; }
   #text-dialog #working #working-now { border-color: #4f6b35; color: #9ece6a; }
   #text-dialog #working #working-screen[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   @media (max-width: 400px) { #working .lead, #working .more { display: none; } }
   #text-dialog #jump-new { position: absolute; right: 12px; bottom: calc(100% + 8px); z-index: 2; min-height: 36px; border-color: var(--accent); background: var(--accent); color: #1f1e1d; box-shadow: 0 4px 16px #0008; }
   .msg.user.pending .bubble { opacity: 0.6; }
   #text-dialog.typing #composer { padding-bottom: 8px; }
-  @media (max-width: 440px) {
-    .text-heading { gap: 8px; padding: 4px 8px 4px 12px; }
-    #text-dialog .text-tools { gap: 5px; }
-  }
   /* The header buttons must never wrap onto a second row (it wastes a whole bar of height), so labels go first. */
   @media (max-width: 720px) {
     .tools span { display: none; }
   }
   @media (max-width: 540px) {
-    header { grid-template-columns: auto 1fr; gap: 4px 6px; }
+    header { grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; }
     #back { grid-row: 1; grid-column: 1; font-size: 14px; }
-    .tools { grid-row: 1; grid-column: 2; justify-self: end; gap: 3px; }
+    .tools { grid-row: 1; grid-column: 2; gap: 4px; }
+    [id="fs-"], [id="fs+"] { order: 7; } #close-session { order: 9; } /* rarely needed: last, where the row may scroll */
     .session-title { grid-row: 2; grid-column: 1 / -1; }
     #title { justify-content: flex-start; }
-    .hbtn { min-width: 32px; padding: 0 6px; }
+    .hbtn { min-width: 38px; padding: 0 7px; }
   }
   @media (max-width: 360px) {
-    .tools { gap: 2px; }
-    .hbtn { gap: 4px; min-width: 30px; padding: 0 5px; font-size: 13px; }
+    .tools { gap: 3px; }
+    .hbtn { gap: 4px; min-width: 36px; padding: 0 6px; font-size: 13px; }
     .hbtn svg { width: 16px; height: 16px; }
   }
   @media (max-width: 350px) {
-    #back { width: 28px; padding: 0; justify-content: center; font-size: 0; }
+    #back { width: 38px; padding: 0; justify-content: center; font-size: 0; }
     #back::before { content: '‹'; font-size: 24px; }
   }
-  .compact header { grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; padding: 4px 6px; }
-  .compact #back { grid-row: 1; grid-column: 1; width: 26px; padding: 0; justify-content: center; font-size: 0; }
+  .compact header { grid-template-columns: auto minmax(56px, 1fr) minmax(0, auto); gap: 6px; padding: 4px 6px; }
+  .compact #back { grid-row: 1; grid-column: 1; width: 38px; padding: 0; justify-content: center; font-size: 0; }
   .compact #back::before { content: '‹'; font-size: 24px; }
   .compact .session-title { grid-row: 1; grid-column: 2; }
   .compact .tools { grid-row: 1; grid-column: 3; flex-wrap: nowrap; }
   .compact .tools span, .compact [id="fs-"], .compact [id="fs+"] { display: none; }
-  .compact .hbtn { width: 34px; padding: 0; }
+  .compact .hbtn { width: 38px; min-width: 38px; padding: 0; }
   .compact #title { padding: 0 4px; }
   .compact #notice { padding: 4px 8px; font-size: 12px; }
   .compact #keys { display: flex; overflow-x: auto; scrollbar-width: none; gap: 6px; padding: 4px 6px; touch-action: pan-x; }
@@ -339,7 +376,7 @@
 
   /* ---- key bar: a phone gets 8 columns with Enter down the right edge, a desktop one row */
   #keys.phone { grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 5px; }
-  #keys.phone button.enter { grid-column: 8; grid-row: 1 / span 2; height: auto; background: #1b2a45; }
+  #keys.phone button.enter { grid-column: 8; grid-row: 1 / span 2; height: auto; background: #1b2a45; font-size: 1.4rem; }
   #keys.desktop { grid-template-columns: repeat(15, minmax(0, 1fr)); }
   #keys.tablet .kmain { grid-template-columns: repeat(7, minmax(0, 1fr)); }
   #keys button.bs { font-size: 1.15rem; }
@@ -455,6 +492,14 @@
   .f-icon-edit { margin: 0 9px 0 8px; }
   .f-rename { flex: 1; min-width: 0; height: 36px; margin: 6px 4px 6px 0; padding: 0 9px; border: 1px solid var(--accent); border-radius: 8px; background: var(--bg); color: var(--text); font: 16px/1.2 system-ui, -apple-system, sans-serif; }
   .f-empty { padding: 36px 12px; color: var(--muted); font-size: 13px; text-align: center; }
+
+  /* ---- touch screens: every button at least about a fingertip (term.js puts dev-phone / dev-tablet on <html>) */
+  :is(.dev-phone, .dev-tablet) .sbtn { min-width: 40px; height: 38px; }
+  :is(.dev-phone, .dev-tablet) .fchip { height: 38px; padding: 0 14px; }
+  :is(.dev-phone, .dev-tablet) #copy-sources .seg { height: 36px; padding: 0 14px; }
+  :is(.dev-phone, .dev-tablet) .fbtn { width: 42px; height: 42px; }
+  :is(.dev-phone, .dev-tablet) .f-crumbs button { padding: 11px 6px; }
+  :is(.dev-phone, .dev-tablet) .f-crumbs button[aria-current] { padding: 11px 9px; }
 </style>
 </head>
 <body>
@@ -573,18 +618,18 @@
   <div class="text-heading">
     <a id="text-back" class="text-back" href="./" title="Detach: back to the session list (the session keeps running)" aria-label="Detach and return to the session list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg><span>Detach</span></a>
     <h2 id="text-heading" class="sr-only">Read</h2>
-    <div class="text-tools">
+    <div class="text-tools" id="text-tools">
       <button id="text-files" type="button" aria-label="Files" title="Files: browse folders, insert a path into the message" aria-haspopup="dialog" aria-controls="files-dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
       <button id="text-scratch" type="button" aria-label="Scratch terminal" title="Scratch terminal over this view" aria-controls="scratch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="16" rx="3"/><path d="m6.5 9 3 3-3 3M12 15h4"/></svg></button>
-      <button id="text-render" type="button" aria-pressed="true" aria-label="Render Markdown, code and math" title="Render Markdown, code and math" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
       <button id="text-copy" type="button" aria-label="Copy" title="Copy: the conversation as editable text" aria-controls="copy-panel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></svg></button>
       <button id="text-fmt" type="button" aria-pressed="false" aria-expanded="false" aria-controls="text-fmt-panel" aria-label="Text size and width" title="Text size and width"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 19 8.5 5h1L15 19M5.2 14h7.6M16 19l3.2-8h.6L23 19M17 16.5h5"/></svg></button>
       <button id="text-refresh" type="button" aria-label="Refresh" title="Load the latest output"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
-      <button id="text-done" type="button" aria-label="Done: back to the terminal" title="Back to the terminal (the session keeps running)" autofocus>Done</button>
     </div>
+    <button id="text-done" type="button" aria-label="Done: back to the terminal" title="Back to the terminal (the session keeps running)" autofocus>Done</button>
   </div>
   <div id="text-fmt-panel" role="group" aria-label="Text size and width" hidden>
     <span class="fmt-group"><span class="fmt-label">Size</span><button type="button" data-scale="-1" aria-label="Smaller text">A−</button><output id="text-scale" aria-live="polite">100%</output><button type="button" data-scale="1" aria-label="Larger text">A+</button><input id="text-scale-range" type="range" min="0" max="15" step="1" aria-label="Text size"></span>
+    <span class="fmt-group"><span class="fmt-label">View</span><button id="text-render" type="button" aria-pressed="true" title="Render Markdown, code and math (off: the raw text)">Rendered</button></span>
     <span class="fmt-group"><span class="fmt-label">Width</span><button type="button" data-width="normal" aria-pressed="true">Normal</button><button type="button" data-width="wide" aria-pressed="false">Wide</button><button type="button" data-width="full" aria-pressed="false">Full</button></span>
   </div>
   <p id="text-instruction">Select the text you want to copy.</p>
@@ -607,12 +652,17 @@
       <pre id="peek-screen" tabindex="0" aria-label="Terminal screen" role="region"></pre>
       <div id="peek-keys" role="group" aria-label="Send a key to Claude"></div>
     </div>
+    <div id="editor-bar" hidden>
+      <button id="composer-collapse" type="button" title="Back to the conversation (the message stays)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg><span>Conversation</span></button>
+      <span id="composer-count" aria-hidden="true"></span>
+    </div>
     <div class="composer-row">
       <button id="peek-toggle" type="button" aria-pressed="false" aria-controls="peek" aria-label="Show terminal screen and keys" title="Show the terminal screen and keys (for permission prompts)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
       </button>
       <button id="composer-attach" type="button" aria-label="Upload files and add their paths" title="Upload files or a folder and add their paths to the message" aria-haspopup="dialog" aria-controls="upload-dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7 9l5-5 5 5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></button>
       <textarea id="composer-input" rows="1" maxlength="20000" placeholder="Message Claude…" aria-label="Message to Claude" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" spellcheck="true"></textarea>
+      <button id="composer-expand" type="button" aria-label="Full-screen editor" title="Write in a full-screen editor"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M10 20H4v-6M20 4l-6.5 6.5M4 20l6.5-6.5"/></svg></button>
       <button id="composer-send" type="button" disabled>Send</button>
     </div>
   </div>
@@ -661,6 +711,6 @@
     <button id="upload-paste" class="primary" type="button" hidden>Paste</button>
   </div>
 </dialog>
-<script src="term.js?v=20261031-clipupload"></script>
+<script src="term.js?v=20261101-mobile"></script>
 </body>
 </html>

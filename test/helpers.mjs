@@ -33,7 +33,9 @@ export async function startApi(extraEnv = {}) {
   const token = mint('owner@example.com');
   const usersFile = path.join(dir, 'users.json'); // never the real ~/.config/tmux-web/users.json
 
-  const env = { ...process.env, TMUX_WEB_API_SOCK: socket, TMUX_BIN: wrapper, TMUX_WEB_PREVIEW: '0',
+  // nothing inherited from a real tmux-web (the tests may run in a terminal it serves: TMUX_WEB_MULTI_ACCOUNT, TMUX_WEB_USERS, ...)
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('TMUX_WEB_')));
+  const env = { ...inherited, TMUX_WEB_API_SOCK: socket, TMUX_BIN: wrapper, TMUX_WEB_PREVIEW: '0',
     CF_ACCESS_TEAM_DOMAIN: 'test.cloudflareaccess.com', CF_ACCESS_AUD: 'test-aud',
     CF_ACCESS_CERTS_URL: `http://127.0.0.1:${certs.address().port}/certs`, ALLOWED_EMAILS: 'owner@example.com', TMUX_WEB_USERS: usersFile,
     TMUX_WEB_PREFS: path.join(dir, 'prefs.json'), TMUX_WEB_UPLOADS: path.join(dir, 'uploads'), TMUX_WEB_UPLOAD_RESERVE_MB: '0', // never the real prefs file or uploads either
