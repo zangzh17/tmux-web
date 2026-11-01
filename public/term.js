@@ -326,20 +326,30 @@
       return out + fn(part.text.slice(last));
     }).join('\n');
   }
-  function markdown(src) {
+  // Math is taken out before Markdown sees it (it would eat the backslashes and underscores) and put back as KaTeX after.
+  function withMath(src, render) {
     const maths = [];
     const tag = `MATHX${Math.random().toString(36).slice(2, 8)}Q`; // per call, so code that mentions a placeholder cannot forge one
     const hidden = mapOutsideCode(src, (t) => t.replace(MATH, (_m, a, b, c, d) => {
       maths.push({ tex: (a ?? b ?? c ?? d).trim(), display: a !== undefined || b !== undefined });
       return `${tag}${maths.length - 1}X`;
     }));
-    const html = DOMPurify.sanitize(marked.parse(hidden, { gfm: true, breaks: true }), {
-      FORBID_TAGS: ['style', 'img', 'picture', 'source', 'video', 'audio', 'form', 'input', 'button', 'textarea', 'select'], FORBID_ATTR: ['style'],
-    });
-    return html.replace(new RegExp(`${tag}(\\d+)X`, 'g'), (_m, i) => {
+    return render(hidden).replace(new RegExp(`${tag}(\\d+)X`, 'g'), (_m, i) => {
       const m = maths[+i];
       return m ? katex.renderToString(m.tex, { displayMode: m.display, throwOnError: false }) : '';
     });
+  }
+  const markdown = (src) => withMath(src, (hidden) => DOMPurify.sanitize(marked.parse(hidden, { gfm: true, breaks: true }), {
+    FORBID_TAGS: ['style', 'img', 'picture', 'source', 'video', 'audio', 'form', 'input', 'button', 'textarea', 'select'], FORBID_ATTR: ['style'],
+  }));
+  // A Markdown file: the document's own line breaks, its images (a relative one comes from this machine, see wireMarkdown),
+  // task-list boxes; still no scripts, styles or forms.
+  let fileMarked = null;
+  function fileMarkdown(src) {
+    fileMarked ||= new marked.Marked({ gfm: true, breaks: false, renderer: { code: ({ text, lang }) => codeBlock(text, lang) } });
+    return withMath(src, (hidden) => DOMPurify.sanitize(fileMarked.parse(hidden), {
+      FORBID_TAGS: ['style', 'form', 'button', 'textarea', 'select', 'iframe', 'object', 'embed'], FORBID_ATTR: ['style'],
+    }));
   }
 
   // -- conversation layout: the whole loaded list is laid out again on every change
@@ -2492,8 +2502,8 @@
     if (!coarse && !$textDialog.open) activeTerm()?.focus();
   });
   $copyPanel.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !isModal($copyPanel)) { e.preventDefault(); closeCopy(); } });
-  $copyOpen.addEventListener('click', () => { if ($copyPanel.open) closeCopy(); else void openCopy(claudeHere ? 'conversation' : 'terminal'); });
-  document.getElementById('text-copy').addEventListener('click', () => { void openCopy('conversation'); });
+  $copyOpen.addEventListener('click', () => { if ($copyPanel.open) closeCopy(); else openExportMenu($copyOpen); });
+  document.getElementById('text-copy').addEventListener('click', (event) => openExportMenu(event.currentTarget));
   document.getElementById('copy-close').addEventListener('click', closeCopy);
   document.getElementById('copy-reload').addEventListener('click', () => { void loadCopy(copySource); });
   $copyWrap.addEventListener('click', () => setWrap($copyText.wrap === 'off'));
@@ -2594,7 +2604,11 @@
     const what = kind === 'dir' ? (e.type === 'link-dir' ? 'link to a folder' : 'folder') : e.type === 'link-broken' ? 'broken link' : e.size != null ? formatBytes(e.size) : '';
     text.append(make('span', 'f-name', e.name), make('span', 'f-meta', [what, e.mtime ? when(e.mtime) : ''].filter(Boolean).join(' · ')));
     open.append(icon, text);
-    open.addEventListener('click', () => { if (kind === 'dir') void filesGo({ path: join(folder.path, e.name) }); else toggleActions(li, e); });
+    open.addEventListener('click', () => {
+      if (kind === 'dir') void filesGo({ path: join(folder.path, e.name) });
+      else if (kind === 'file') void openView(join(folder.path, e.name)); // over the file manager, which stays where it was
+      else toggleActions(li, e);
+    });
     const more = make('button', 'f-more');
     more.type = 'button';
     more.innerHTML = svgIcon(ICONS.more);
@@ -2625,6 +2639,7 @@
     const full = join(folder.path, e.name);
     const box = make('div', 'f-actions');
     if (kindOf(e) === 'dir') box.append(action('cd', () => typeCd(full), 'shell-only'), action('Scratch here', () => scratchIn(full)));
+    if (kindOf(e) === 'file') box.append(action('View', () => { void openView(full); }));
     box.append(action('Insert path', () => insertPath(full)), action('Copy path', () => { void copyText(full).then((ok) => filesStatus(ok ? `Copied ${full}` : 'The browser did not allow copying.', !ok)); }), action('Rename', () => startRename(li, e)),
       action('Delete', () => confirmDelete(li, e, box), 'danger'));
     li.append(box);
@@ -2853,5 +2868,558 @@
       showNotice(error.message, true);
     }
   }
+  // ---- Export: the text as plain text (the Copy sheet), or a file of this machine in the viewer
+  const $exportMenu = document.getElementById('export-menu');
+  let exportFrom = null;
+  function openExportMenu(button) {
+    if (!$exportMenu.hidden && exportFrom === button) { closeExportMenu(); return; }
+    closeExportMenu();
+    hideMenu();
+    hideCmdMenu();
+    closeArrowPop();
+    exportFrom = button;
+    // over the Read view it has to be inside that dialog (the only layer above it); anywhere else it sits in the page
+    const host = $textDialog.open && $textDialog.contains(button) ? $textDialog : document.getElementById('app');
+    host.append($exportMenu);
+    $exportMenu.hidden = false;
+    const b = button.getBoundingClientRect(), h = host.getBoundingClientRect(), width = $exportMenu.offsetWidth;
+    $exportMenu.style.left = `${Math.max(8, Math.min(b.right - h.left - width, h.width - width - 8))}px`;
+    $exportMenu.style.top = `${b.bottom - h.top + 6}px`;
+    button.setAttribute('aria-expanded', 'true');
+    if (!coarse) $exportMenu.querySelector('button').focus({ preventScroll: true });
+  }
+  function closeExportMenu() {
+    if ($exportMenu.hidden) return;
+    $exportMenu.hidden = true;
+    if (exportFrom && !(exportFrom === $copyOpen && $copyPanel.open)) exportFrom.setAttribute('aria-expanded', 'false');
+    exportFrom = null;
+  }
+  document.addEventListener('pointerdown', (event) => {
+    if (!$exportMenu.hidden && !$exportMenu.contains(event.target) && !exportFrom?.contains(event.target)) closeExportMenu();
+  }, true);
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !$exportMenu.hidden) { event.preventDefault(); closeExportMenu(); exportFrom?.focus(); } }, true);
+  addEventListener('blur', closeExportMenu); // a tap into the terminal (an iframe) never reaches this document
+  document.getElementById('export-text').addEventListener('click', () => {
+    const fromRead = exportFrom?.id === 'text-copy';
+    closeExportMenu();
+    void openCopy(fromRead || claudeHere ? 'conversation' : 'terminal');
+  });
+  document.getElementById('export-view').addEventListener('click', () => { closeExportMenu(); openViewPrompt(); });
+
+  // ---- View a file: a path typed, pasted (one tap reads the clipboard) or picked from the recent ones, or a file tapped in Files
+  const $viewOpen = document.getElementById('view-open');
+  const $viewPath = document.getElementById('view-path');
+  const $viewError = document.getElementById('view-error');
+  const $viewPaste = document.getElementById('view-paste');
+  const $viewRecent = document.getElementById('view-recent');
+  const viewFrom = () => (scratchUp() && scratch?.id ? scratch.id : sessionId); // a relative path is relative to that session's folder
+  const tilde = (p, home) => (home && (p === home || p.startsWith(`${home}/`)) ? `~${p.slice(home.length)}` : p);
+  function recentViews() {
+    try { const list = JSON.parse(store.get('viewRecent') || '[]'); return Array.isArray(list) ? list.filter((p) => typeof p === 'string').slice(0, 8) : []; } catch { return []; }
+  }
+  function rememberView(p) { store.set('viewRecent', JSON.stringify([p, ...recentViews().filter((x) => x !== p)].slice(0, 8))); }
+  function viewPromptError(message, dir = null) {
+    $viewError.replaceChildren(message);
+    if (dir) {
+      const files = make('button', null, 'Open in Files');
+      files.type = 'button';
+      files.addEventListener('click', () => { $viewOpen.close(); openFiles(); void filesGo({ path: dir }); });
+      $viewError.append(files);
+    }
+    $viewError.hidden = false;
+  }
+  function openViewPrompt(prefill = '') {
+    if ($viewOpen.open) return;
+    $viewError.hidden = true;
+    $viewPath.value = prefill;
+    const recent = recentViews();
+    $viewRecent.replaceChildren(...recent.map((p) => {
+      const li = make('li');
+      const b = make('button');
+      b.type = 'button';
+      const slash = p.lastIndexOf('/');
+      b.append(make('b', null, p.slice(slash + 1) || p), make('span', null, slash > 0 ? p.slice(0, slash) : '/'));
+      b.title = p;
+      b.addEventListener('click', () => { void openView(p, { prompt: true }); });
+      li.append(b);
+      return li;
+    }));
+    document.getElementById('view-recent-box').hidden = !recent.length;
+    // a phone would raise its keyboard over the Paste button and the recent files: the box gets the focus only on a computer
+    $viewPaste.autofocus = coarse;
+    $viewPath.autofocus = !coarse;
+    $viewOpen.showModal();
+  }
+  // What people paste: quotes, file://, a shell-escaped name, "path:42" or "path#L42" (a line), several lines (the first)
+  function cleanPath(raw) {
+    let p = String(raw || '').trim().split(/\r?\n/)[0].trim().replace(/^['"`‘“]+|['"`’”]+$/g, '');
+    if (/^file:\/\//i.test(p)) { try { p = decodeURIComponent(p.replace(/^file:\/\/(?:localhost)?/i, '')); } catch { /* as it is */ } }
+    if (!/\s/.test(p.replace(/\\ /g, ''))) p = p.replace(/\\([ ()'"&;!$`[\]{}#*?<>|\\])/g, '$1');
+    let line = null;
+    const m = /^(.+?)(?::(\d+)(?::\d+)?|#L(\d+)(?:-L?\d+)?)$/.exec(p);
+    if (m) { p = m[1]; line = +(m[2] || m[3]); }
+    return { path: p, line };
+  }
+  document.getElementById('view-open-form').addEventListener('submit', (event) => { event.preventDefault(); void openView($viewPath.value, { prompt: true }); });
+  document.getElementById('view-cancel').addEventListener('click', () => $viewOpen.close());
+  $viewPaste.addEventListener('click', async () => {
+    let text = '';
+    try { text = await navigator.clipboard.readText(); } catch { /* not allowed: say how */ }
+    if (!text.trim()) { viewPromptError('Nothing to paste here. Long-press the box above and choose Paste.'); $viewPath.focus(); return; }
+    $viewPath.value = text.trim().split(/\r?\n/)[0];
+    void openView(text, { prompt: true });
+  });
+  $viewPath.addEventListener('input', () => { $viewError.hidden = true; });
+
+  // ---- the viewer
+  const $viewer = document.getElementById('viewer');
+  const $viewerBody = document.getElementById('viewer-body');
+  const $viewerStatus = document.getElementById('viewer-status');
+  const $viewerSource = document.getElementById('viewer-source');
+  const $viewerWrap = document.getElementById('viewer-wrap');
+  const $viewerFit = document.getElementById('viewer-fit');
+  const $viewerNewtab = document.getElementById('viewer-newtab');
+  const viewer = { file: null, line: null, stack: [], source: false, wrap: store.get('viewWrap') !== '0', fit: true, gen: 0 };
+  edgeFade(document.getElementById('viewer-tools'));
+  const rawUrl = (p, extra = '') => `api/files/raw?path=${encodeURIComponent(p)}${extra}`;
+  const TEXT_MAX = 4 * 2 ** 20; // more than this is shown cut, with a note
+  const VIEW_ERRORS = { 400: 'That is not a file that can be shown.', 403: 'Permission denied.', 404: 'Not found.' };
+  const viewerStatus = (message, error = false) => { $viewerStatus.replaceChildren(message || ''); $viewerStatus.classList.toggle('error', error); $viewerStatus.hidden = !message; };
+  async function openView(raw, { prompt = false, push = false, back = null } = {}) {
+    const { path: asked, line } = cleanPath(raw);
+    const fail = (message, dir) => { if (prompt) viewPromptError(message, dir); else if ($viewer.open) viewerStatus(message, true); else openViewPrompt(asked); if (!prompt && !$viewer.open) viewPromptError(message, dir); };
+    if (!asked) { fail('Type or paste the path of a file.'); return; }
+    const from = viewFrom();
+    let res, body = {};
+    try {
+      res = await fetch(`api/files/view?path=${encodeURIComponent(asked)}${from ? `&from=${encodeURIComponent(from)}` : ''}`, { credentials: 'same-origin', cache: 'no-store' });
+      body = await res.json().catch(() => ({}));
+    } catch { fail('No connection. Check your network and try again.'); return; }
+    if (!res.ok) { fail(`${VIEW_ERRORS[res.status] || body.error || 'Could not open it.'}${body.path ? ` ${body.path}` : ''}`); return; }
+    if (body.type === 'dir') { fail(`${tilde(body.path, body.home)} is a folder.`, body.path); return; }
+    rememberView(tilde(body.path, body.home));
+    if ($viewOpen.open) $viewOpen.close();
+    if (push && viewer.file) viewer.stack.push({ path: viewer.file.path, scroll: $viewerBody.scrollTop });
+    else if (!push && !back) viewer.stack = [];
+    viewer.file = body;
+    viewer.line = line;
+    viewer.source = false;
+    viewer.fit = true;
+    if (!$viewer.open) { $viewer.showModal(); $viewerBody.focus({ preventScroll: true }); }
+    await renderViewer(back?.scroll);
+  }
+  async function renderViewer(scrollTo = null) {
+    const gen = ++viewer.gen;
+    const f = viewer.file;
+    const { kind } = f;
+    document.getElementById('viewer-name').textContent = f.name;
+    const where = document.getElementById('viewer-where');
+    where.textContent = `‎${tilde(f.dir, f.home)}/‎`;
+    where.title = f.path;
+    document.getElementById('viewer-back').hidden = !viewer.stack.length;
+    $viewerSource.hidden = !['markdown', 'html', 'svg', 'json', 'csv'].includes(kind);
+    $viewerSource.setAttribute('aria-pressed', String(viewer.source));
+    const asCode = viewer.source || ['text', 'json'].includes(kind);
+    $viewerWrap.hidden = !asCode;
+    $viewerWrap.setAttribute('aria-pressed', String(viewer.wrap && !viewer.line)); // a line asked for is shown unwrapped, by its number
+    $viewerFit.hidden = !(['image', 'svg'].includes(kind) && !viewer.source);
+    $viewerFit.textContent = 'Fit';
+    $viewerNewtab.hidden = ['markdown', 'html'].includes(kind);
+    $viewerNewtab.href = rawUrl(f.path);
+    viewerStatus('');
+    $viewerBody.replaceChildren(make('div', 'v-loading', 'Loading…'));
+    $viewerBody.scrollTop = 0;
+    try {
+      if (asCode || ['markdown', 'html', 'csv'].includes(kind)) {
+        const [{ text, cut }] = await Promise.all([fetchText(f), loadLibs().catch(() => null)]);
+        if (gen !== viewer.gen) return;
+        if (cut) viewerStatus(`Showing the first ${formatBytes(TEXT_MAX)} of ${formatBytes(f.size)}.`);
+        if (asCode) showCode(text, kind === 'json' && !viewer.source ? 'json-pretty' : langOf(f));
+        else if (kind === 'markdown') showMarkdown(text, f);
+        else if (kind === 'csv') showCsv(text, f);
+        else await showHtml(text, f, gen);
+      } else if (kind === 'image' || kind === 'svg') showImage(f);
+      else if (kind === 'pdf') showPdf(f);
+      else if (kind === 'video' || kind === 'audio') showMedia(f);
+      else showInfo(f);
+    } catch (error) {
+      if (gen !== viewer.gen) return;
+      $viewerBody.replaceChildren();
+      viewerStatus(error.message || 'Could not show this file.', true);
+    }
+    if (gen === viewer.gen && scrollTo != null) $viewerBody.scrollTop = scrollTo;
+  }
+  async function fetchText(f) {
+    const cut = f.size > TEXT_MAX;
+    const res = await fetch(rawUrl(f.path, '&text=1'), { credentials: 'same-origin', cache: 'no-store', headers: cut ? { range: `bytes=0-${TEXT_MAX - 1}` } : {} });
+    if (!res.ok) throw new Error(VIEW_ERRORS[res.status] || 'Could not read the file.');
+    return { text: new TextDecoder('utf-8').decode(await res.arrayBuffer()), cut };
+  }
+  const LANG_OF = { js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript', py: 'python', sh: 'bash', bash: 'bash', zsh: 'bash',
+    yml: 'yaml', yaml: 'yaml', md: 'markdown', markdown: 'markdown', html: 'xml', htm: 'xml', xhtml: 'xml', svg: 'xml', xml: 'xml', vue: 'xml', svelte: 'xml', css: 'css', scss: 'scss', less: 'less',
+    json: 'json', jsonl: 'json', ndjson: 'json', geojson: 'json', ipynb: 'json', c: 'c', h: 'c', cc: 'cpp', cpp: 'cpp', cxx: 'cpp', hpp: 'cpp', rs: 'rust', go: 'go', java: 'java', kt: 'kotlin',
+    swift: 'swift', rb: 'ruby', php: 'php', pl: 'perl', lua: 'lua', r: 'r', m: 'matlab', sql: 'sql', diff: 'diff', patch: 'diff', toml: 'ini', ini: 'ini', cfg: 'ini', conf: 'ini',
+    service: 'ini', timer: 'ini', socket: 'ini', makefile: 'makefile', gradle: 'java', csv: 'plaintext', tsv: 'plaintext', txt: 'plaintext', log: 'plaintext' };
+  const langOf = (f) => LANG_OF[f.ext] || null;
+  // text with line numbers (unless wrapped), highlighted when not huge; a line asked for is marked and scrolled to
+  function showCode(text, lang) {
+    if (lang === 'json-pretty') {
+      lang = 'json';
+      if (!/^(jsonl|ndjson)$/.test(viewer.file.ext)) {
+        try { text = JSON.stringify(JSON.parse(text), null, 2); } catch (error) { viewerStatus(`Not valid JSON (${error.message}): shown as it is.`, true); }
+      }
+    }
+    const line = viewer.line;
+    const box = make('div', `v-codewrap${viewer.wrap && !line ? ' wrap' : ''}`);
+    const lines = text.split('\n');
+    if (lines.length > 1 && lines.at(-1) === '') lines.pop();
+    const gutter = make('div', 'v-gutter', lines.map((_l, i) => i + 1).join('\n'));
+    gutter.setAttribute('aria-hidden', 'true');
+    const pre = make('pre', 'v-code');
+    const code = make('code', 'hljs');
+    if (libsReady() && text.length <= 400000 && lang !== 'plaintext') code.innerHTML = highlight(text, lang || undefined).html; // highlight() escapes
+    else code.textContent = text;
+    pre.append(code);
+    box.append(gutter, pre);
+    $viewerBody.replaceChildren(box);
+    if (line) {
+      const cs = getComputedStyle(pre), height = parseFloat(cs.lineHeight) || 20;
+      const mark = make('div', 'v-mark');
+      mark.style.top = `${parseFloat(cs.paddingTop) + (Math.min(line, lines.length) - 1) * height}px`;
+      mark.style.height = `${height}px`;
+      pre.prepend(mark);
+      $viewerBody.scrollTop = Math.max(0, mark.offsetTop - $viewerBody.clientHeight / 3);
+      if (line > lines.length) viewerStatus(`The file has ${lines.length} lines.`);
+    }
+  }
+  // Markdown: rendered like the conversation, with the document's own images, links to other files opening here
+  function showMarkdown(text, f) {
+    if (!libsReady()) { showCode(text, 'markdown'); viewerStatus('Could not load the renderer: shown as text.', true); return; }
+    const article = make('article', 'md v-md');
+    let front = null;
+    const fm = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(text);
+    if (fm && fm[0].length < 20000) { front = fm[1]; text = text.slice(fm[0].length); }
+    article.innerHTML = fileMarkdown(text); // sanitized by DOMPurify in fileMarkdown
+    if (front != null) {
+      const details = make('details', 'v-front');
+      details.append(make('summary', null, 'Front matter'));
+      details.insertAdjacentHTML('beforeend', codeBlock(front, 'yaml')); // codeBlock escapes
+      article.prepend(details);
+    }
+    wireMarkdown(article, f);
+    $viewerBody.replaceChildren(article);
+  }
+  const isLocalRef = (ref) => !!ref && !/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(ref.trim());
+  function resolveRef(dir, ref) {
+    let [target, hash = ''] = ref.trim().split('#');
+    target = target.split('?')[0];
+    try { target = decodeURIComponent(target); } catch { /* as written */ }
+    const parts = [];
+    for (const part of (target.startsWith('/') ? target : `${dir}/${target}`).split('/')) {
+      if (!part || part === '.') continue;
+      if (part === '..') parts.pop(); else parts.push(part);
+    }
+    const line = /^L(\d+)/.exec(hash);
+    return `/${parts.join('/')}${line ? `:${line[1]}` : ''}`;
+  }
+  const slug = (t) => t.trim().toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-');
+  function wireMarkdown(article, f) {
+    const seen = new Map();
+    for (const h of article.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
+      const id = slug(h.textContent) || 'section';
+      const n = seen.get(id) || 0;
+      seen.set(id, n + 1);
+      h.id = n ? `${id}-${n}` : id;
+    }
+    for (const img of article.querySelectorAll('img[src]')) {
+      const src = img.getAttribute('src');
+      if (isLocalRef(src)) img.src = rawUrl(resolveRef(f.dir, src).replace(/:\d+$/, ''));
+      img.loading = 'lazy';
+      img.decoding = 'async';
+    }
+    for (const a of article.querySelectorAll('a[href]')) {
+      const href = a.getAttribute('href');
+      if (href.startsWith('#')) { a.removeAttribute('target'); a.dataset.anchor = href.slice(1); } else if (isLocalRef(href)) { a.removeAttribute('target'); a.dataset.path = resolveRef(f.dir, href); }
+    }
+    for (const box of article.querySelectorAll('input')) box.disabled = true;
+  }
+  $viewerBody.addEventListener('click', async (event) => {
+    const link = event.target.closest?.('a[data-anchor], a[data-path]');
+    if (link) {
+      event.preventDefault();
+      if (link.dataset.path) { void openView(link.dataset.path, { push: true }); return; }
+      let id = link.dataset.anchor;
+      try { id = decodeURIComponent(id); } catch { /* as written */ }
+      $viewerBody.querySelector(`[id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'start' });
+      return;
+    }
+    const button = event.target.closest?.('.copy-code');
+    const code = button?.closest('.code-block')?.querySelector('code');
+    if (!code) return;
+    const ok = await copyText(code.textContent);
+    button.textContent = ok ? 'Copied' : 'Copy';
+    setTimeout(() => { button.textContent = 'Copy'; }, 1600);
+  });
+  // HTML runs in a sandbox (an origin of its own: no cookies, no way into this page or its API). Its own CSS, scripts and images
+  // from this machine are put inside it first, since a sandboxed page's requests would not carry the sign-in; a link to another
+  // file comes back here (a small script added to the page) and opens in the viewer.
+  const LINK_GUARD = `<script>(()=>{document.addEventListener('click',(e)=>{const a=e.target.closest&&e.target.closest('a[href]');if(!a||e.defaultPrevented)return;const h=a.getAttribute('href')||'';if(!h||h[0]==='#'||/^javascript:/i.test(h))return;if(/^(?:[a-z][a-z0-9+.-]*:|\\/\\/)/i.test(h)){a.target='_blank';a.rel='noopener';return;}e.preventDefault();parent.postMessage({tmuxweb:'open',href:h},'*');},true);})();<\/script>`;
+  async function showHtml(text, f, gen) {
+    const html = await inlineAssets(text, f);
+    if (gen !== viewer.gen) return;
+    const frame = make('iframe', 'v-frame');
+    frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox');
+    frame.setAttribute('referrerpolicy', 'no-referrer');
+    frame.title = f.name;
+    frame.srcdoc = html;
+    $viewerBody.replaceChildren(frame);
+  }
+  async function inlineAssets(text, f) {
+    const doc = new DOMParser().parseFromString(text, 'text/html');
+    let budget = 40 * 2 ** 20;
+    const blobs = new Map();
+    const blobOf = (p) => {
+      if (!blobs.has(p)) {
+        blobs.set(p, (async () => {
+          const res = await fetch(rawUrl(p), { credentials: 'same-origin', cache: 'no-store' });
+          if (!res.ok) return null;
+          const size = +res.headers.get('content-length') || 0;
+          if (size > 15 * 2 ** 20 || (budget -= size) < 0) return null; // a big video stays out
+          return res.blob();
+        })().catch(() => null));
+      }
+      return blobs.get(p);
+    };
+    const dataUrl = async (p) => {
+      const blob = await blobOf(p);
+      return blob && new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => resolve(null); r.readAsDataURL(blob); });
+    };
+    const fileOnly = (p) => p.replace(/:\d+$/, '');
+    const dirOf = (p) => p.slice(0, p.lastIndexOf('/')) || '/';
+    async function css(textIn, base, depth = 0) {
+      let out = textIn;
+      if (depth < 3) {
+        for (const m of [...out.matchAll(/@import\s+(?:url\(\s*)?(['"]?)([^'")\s;]+)\1\s*\)?([^;]*);/g)]) {
+          if (!isLocalRef(m[2])) continue;
+          const p = fileOnly(resolveRef(base, m[2]));
+          const blob = await blobOf(p);
+          if (blob) out = out.replace(m[0], `@media ${m[3].trim() || 'all'} {\n${await css(await blob.text(), dirOf(p), depth + 1)}\n}`);
+        }
+      }
+      const urls = [...new Set([...out.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g)].map((m) => m[2]).filter(isLocalRef))];
+      const found = await Promise.all(urls.map((u) => dataUrl(fileOnly(resolveRef(base, u)))));
+      urls.forEach((u, i) => { if (found[i]) out = out.split(u).join(found[i]); });
+      return out;
+    }
+    const jobs = [];
+    for (const link of doc.querySelectorAll('link[rel~="stylesheet"][href]')) {
+      const href = link.getAttribute('href');
+      if (!isLocalRef(href)) continue;
+      jobs.push((async () => {
+        const p = fileOnly(resolveRef(f.dir, href));
+        const blob = await blobOf(p);
+        if (!blob) return;
+        const style = doc.createElement('style');
+        if (link.media) style.media = link.media;
+        style.textContent = await css(await blob.text(), dirOf(p));
+        link.replaceWith(style);
+      })());
+    }
+    for (const style of doc.querySelectorAll('style')) jobs.push((async () => { style.textContent = await css(style.textContent, f.dir); })());
+    for (const node of doc.querySelectorAll('[style*="url("]')) jobs.push((async () => { node.setAttribute('style', await css(node.getAttribute('style'), f.dir)); })());
+    for (const script of doc.querySelectorAll('script[src]')) {
+      const src = script.getAttribute('src');
+      if (!isLocalRef(src)) continue;
+      jobs.push((async () => {
+        const blob = await blobOf(fileOnly(resolveRef(f.dir, src)));
+        if (!blob) return;
+        script.removeAttribute('src');
+        script.textContent = (await blob.text()).replace(/<\/script/gi, '<\\/script');
+      })());
+    }
+    const ATTRS = [['img', 'src'], ['source', 'src'], ['video', 'src'], ['video', 'poster'], ['audio', 'src'], ['track', 'src'], ['input[type="image"]', 'src'],
+      ['link[rel~="icon"]', 'href'], ['embed', 'src'], ['object', 'data'], ['image', 'href'], ['image', 'xlink:href']];
+    for (const [selector, attr] of ATTRS) {
+      for (const node of doc.querySelectorAll(selector)) {
+        const ref = node.getAttribute(attr);
+        if (!isLocalRef(ref)) continue;
+        jobs.push((async () => { const url = await dataUrl(fileOnly(resolveRef(f.dir, ref))); if (url) node.setAttribute(attr, url); })());
+      }
+    }
+    for (const node of doc.querySelectorAll('img[srcset], source[srcset]')) {
+      jobs.push((async () => {
+        const parts = await Promise.all(node.getAttribute('srcset').split(',').map(async (part) => {
+          const [ref, ...rest] = part.trim().split(/\s+/);
+          const url = isLocalRef(ref) ? await dataUrl(fileOnly(resolveRef(f.dir, ref))) : ref;
+          return [url || ref, ...rest].join(' ');
+        }));
+        node.setAttribute('srcset', parts.join(', '));
+      })());
+    }
+    await Promise.all(jobs);
+    doc.head.insertAdjacentHTML('afterbegin', `<meta name="referrer" content="no-referrer">${LINK_GUARD}`);
+    return `<!doctype html>\n${doc.documentElement.outerHTML}`;
+  }
+  addEventListener('message', (event) => {
+    if (!$viewer.open || event.data?.tmuxweb !== 'open' || typeof event.data.href !== 'string' || !viewer.file) return;
+    const frame = $viewerBody.querySelector('iframe.v-frame');
+    if (!frame || event.source !== frame.contentWindow) return; // only the page shown here, and it only asks to view a file
+    void openView(resolveRef(viewer.file.dir, event.data.href), { push: true });
+  });
+  // images: fitted to the screen on a checkerboard; Fit, a double tap or a double click shows it at its own size; two fingers zoom
+  function showImage(f) {
+    const box = make('div', `v-img fit${f.kind === 'svg' ? ' svg' : ''}`);
+    const img = new Image();
+    img.alt = f.name;
+    img.decoding = 'async';
+    img.src = rawUrl(f.path, `&v=${f.mtime}`);
+    let scale = 1;
+    const natural = () => img.naturalWidth || box.clientWidth;
+    const apply = () => {
+      box.classList.toggle('fit', viewer.fit);
+      img.style.width = viewer.fit ? '' : `${Math.round(natural() * scale)}px`;
+      img.style.height = viewer.fit ? '' : 'auto';
+      $viewerFit.textContent = viewer.fit ? 'Fit' : `${Math.round(scale * 100)}%`;
+      $viewerFit.setAttribute('aria-pressed', String(!viewer.fit));
+    };
+    const zoomAt = (next, x, y) => { // keep the point under (x, y) where it is
+      const r = box.getBoundingClientRect(), before = img.getBoundingClientRect();
+      const fx = (x - before.left) / (before.width || 1), fy = (y - before.top) / (before.height || 1);
+      if (viewer.fit) { scale = before.width / natural(); viewer.fit = false; }
+      scale = Math.min(16, Math.max(0.05, next ?? scale));
+      apply();
+      const after = img.getBoundingClientRect();
+      box.scrollLeft += after.left + fx * after.width - x;
+      box.scrollTop += after.top + fy * after.height - y;
+      void r;
+    };
+    const toggle = (x, y) => { if (viewer.fit) zoomAt(1, x, y); else { viewer.fit = true; apply(); } };
+    viewer.toggleFit = () => { const r = box.getBoundingClientRect(); toggle(r.left + r.width / 2, r.top + r.height / 2); };
+    img.addEventListener('load', () => {
+      document.getElementById('viewer-where').textContent = `‎${img.naturalWidth ? `${img.naturalWidth} × ${img.naturalHeight} · ` : ''}${formatBytes(f.size)} · ${tilde(f.dir, f.home)}/‎`;
+    });
+    img.addEventListener('error', () => viewerStatus(f.ext === 'heic' || f.ext === 'heif' ? 'This browser cannot show HEIC images (Safari can). Open it in a new tab to download it.' : 'Could not show this image.', true));
+    box.addEventListener('dblclick', (event) => { event.preventDefault(); toggle(event.clientX, event.clientY); });
+    let lastTap = 0, pinch = null;
+    box.addEventListener('touchstart', (event) => {
+      if (event.touches.length === 2) {
+        event.preventDefault();
+        const [a, b] = event.touches;
+        pinch = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), start: viewer.fit ? img.getBoundingClientRect().width / natural() : scale };
+      }
+    }, { passive: false });
+    box.addEventListener('touchmove', (event) => {
+      if (!pinch || event.touches.length !== 2) return;
+      event.preventDefault();
+      const [a, b] = event.touches;
+      zoomAt(pinch.start * Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / (pinch.d || 1), (a.clientX + b.clientX) / 2, (a.clientY + b.clientY) / 2);
+    }, { passive: false });
+    box.addEventListener('touchend', (event) => {
+      if (pinch) { if (event.touches.length < 2) pinch = null; lastTap = 0; return; }
+      if (event.changedTouches.length !== 1 || event.touches.length) return;
+      const t = event.changedTouches[0], now = Date.now();
+      if (now - lastTap < 320) { event.preventDefault(); toggle(t.clientX, t.clientY); lastTap = 0; } else lastTap = now;
+    });
+    box.append(img);
+    $viewerBody.replaceChildren(box);
+  }
+  $viewerFit.addEventListener('click', () => viewer.toggleFit?.());
+  function showPdf(f) {
+    const frame = make('iframe', 'v-frame pdf');
+    frame.title = f.name;
+    frame.src = rawUrl(f.path, `&v=${f.mtime}`);
+    $viewerBody.replaceChildren(frame);
+    if (coarse) {
+      const open = make('a', null, 'Open it in a new tab');
+      open.href = rawUrl(f.path);
+      open.target = '_blank';
+      open.rel = 'noopener';
+      viewerStatus('');
+      $viewerStatus.append('A phone may show only the first page here. ', open, ' for all of them.');
+      $viewerStatus.hidden = false;
+    }
+  }
+  function showMedia(f) {
+    const box = make('div', 'v-media');
+    const media = make(f.kind === 'video' ? 'video' : 'audio');
+    media.controls = true;
+    media.preload = 'metadata';
+    media.setAttribute('playsinline', '');
+    media.src = rawUrl(f.path, `&v=${f.mtime}`);
+    media.addEventListener('error', () => viewerStatus('This browser cannot play this file. Open it in a new tab to download it.', true));
+    box.append(media);
+    $viewerBody.replaceChildren(box);
+  }
+  function showInfo(f) {
+    const card = make('div', 'v-info');
+    card.append(make('b', null, f.name), `${formatBytes(f.size)} · not a kind of file this viewer shows.`, make('br'));
+    const get = make('a', null, 'Download');
+    get.href = rawUrl(f.path, '&download=1');
+    get.setAttribute('download', f.name);
+    card.append(get);
+    $viewerBody.replaceChildren(card);
+  }
+  // CSV / TSV: a table, its header and row numbers kept in view
+  function parseCsv(text, delim) {
+    const rows = [];
+    let row = [], field = '', quoted = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (quoted) {
+        if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else quoted = false; } else field += c;
+      } else if (c === '"' && field === '') quoted = true;
+      else if (c === delim) { row.push(field); field = ''; } else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text[i + 1] === '\n') i++;
+        row.push(field); rows.push(row); row = []; field = '';
+        if (rows.length > 5000) break;
+      } else field += c;
+    }
+    if (field !== '' || row.length) { row.push(field); rows.push(row); }
+    return rows;
+  }
+  function showCsv(text, f) {
+    const first = text.slice(0, text.indexOf('\n') >>> 0);
+    const delim = f.ext === 'tsv' ? '\t' : [',', ';', '\t'].reduce((best, d) => (first.split(d).length > first.split(best).length ? d : best), ',');
+    const rows = parseCsv(text, delim);
+    const table = make('table', 'v-table');
+    const [head = [], ...body] = rows;
+    const tr = make('tr');
+    tr.append(make('th', 'rn', ''), ...head.map((h) => make('th', null, h)));
+    table.append(make('thead'));
+    table.tHead.append(tr);
+    const tbody = make('tbody');
+    body.slice(0, 5000).forEach((cells, i) => { const r = make('tr'); r.append(make('td', 'rn', String(i + 1)), ...cells.map((c) => { const td = make('td', null, c); if (c.length > 40) td.title = c; return td; })); tbody.append(r); });
+    table.append(tbody);
+    $viewerBody.replaceChildren(table);
+    if (rows.length > 5000) viewerStatus('Showing the first 5,000 rows.');
+  }
+  $viewerSource.addEventListener('click', () => { viewer.source = !viewer.source; void renderViewer(); });
+  $viewerWrap.addEventListener('click', () => {
+    const box = $viewerBody.querySelector('.v-codewrap');
+    viewer.wrap = !(box ? box.classList.contains('wrap') : viewer.wrap);
+    store.set('viewWrap', viewer.wrap ? '1' : '0');
+    $viewerWrap.setAttribute('aria-pressed', String(viewer.wrap));
+    box?.classList.toggle('wrap', viewer.wrap);
+  });
+  document.getElementById('viewer-copy').addEventListener('click', async () => {
+    if (!viewer.file) return;
+    const ok = await copyText(viewer.file.path);
+    viewerStatus(ok ? `Copied ${viewer.file.path}` : 'The browser did not allow copying.', !ok);
+    if (ok) setTimeout(() => { if ($viewerStatus.textContent.startsWith('Copied')) viewerStatus(''); }, 2500);
+  });
+  document.getElementById('viewer-reload').addEventListener('click', () => { if (viewer.file) void openView(viewer.file.path + (viewer.line ? `:${viewer.line}` : ''), { back: { scroll: $viewerBody.scrollTop } }); });
+  document.getElementById('viewer-back').addEventListener('click', () => {
+    const prev = viewer.stack.pop();
+    if (prev) void openView(prev.path, { back: prev });
+  });
+  document.getElementById('viewer-close').addEventListener('click', () => $viewer.close());
+  $viewer.addEventListener('close', () => {
+    viewer.gen++;
+    viewer.file = null;
+    viewer.stack = [];
+    viewer.toggleFit = null;
+    $viewerBody.replaceChildren(); // stops a video, drops a page
+  });
+
   void connect();
 })();

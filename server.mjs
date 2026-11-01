@@ -624,6 +624,116 @@ async function changeFiles(req) {
   return { status: 200, body: { ok: true } };
 }
 
+// ---- viewing a file on this machine (the page's quick viewer), as this account's Unix user, read-only.
+// GET /api/files/view?path=<p>&from=<session id> -> { type: 'file', path, name, dir, size, mtime, kind, ext, home } | { type: 'dir', path, home }
+//   p is absolute, ~ or ~/..., or relative to that session's directory (else the home folder). kind tells the page how to show
+//   it: markdown, html, image, svg, pdf, video, audio, json, csv, text or binary (a file with no known extension is looked at:
+//   a NUL byte or invalid UTF-8 in its first 8 KB makes it binary).
+// GET|HEAD /api/files/raw?path=<absolute>[&text=1][&download=1] -> the bytes, one byte range if asked (video needs it on iOS).
+//   Never cached (private, no-store: Cloudflare would otherwise keep a .png at its edge for anyone behind the same Access app),
+//   never sniffed, and sandboxed (all but PDF): opened as a page of its own an HTML or SVG file runs in an opaque origin, away
+//   from this site's cookies and API. text=1 sends it as text/plain (the page renders HTML and Markdown itself; Cloudflare leaves
+//   text/plain alone), download=1 as an attachment.
+const VIEW_KINDS = {
+  markdown: ['md', 'markdown', 'mdown', 'mkd', 'mkdn', 'mdx'], html: ['html', 'htm', 'xhtml'], svg: ['svg'],
+  image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'heic', 'heif'], pdf: ['pdf'],
+  video: ['mp4', 'm4v', 'mov', 'webm', 'ogv'], audio: ['mp3', 'm4a', 'aac', 'wav', 'ogg', 'oga', 'opus', 'flac'], json: ['json', 'jsonl', 'ndjson', 'geojson', 'ipynb'],
+  csv: ['csv', 'tsv'],
+  text: ['txt', 'log', 'text', 'conf', 'cfg', 'ini', 'toml', 'yaml', 'yml', 'xml', 'sh', 'bash', 'zsh', 'fish', 'py', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx',
+    'css', 'scss', 'less', 'c', 'h', 'cc', 'cpp', 'hpp', 'cxx', 'rs', 'go', 'java', 'kt', 'swift', 'rb', 'php', 'pl', 'lua', 'r', 'm', 'jl', 'sql', 'tex',
+    'bib', 'rst', 'org', 'adoc', 'diff', 'patch', 'env', 'service', 'timer', 'socket', 'gitignore', 'dockerfile', 'makefile', 'cmake', 'gradle', 'vue', 'svelte'],
+};
+const KIND_OF_EXT = new Map(Object.entries(VIEW_KINDS).flatMap(([kind, exts]) => exts.map((ext) => [ext, kind])));
+const MIME = { md: 'text/markdown', markdown: 'text/markdown', html: 'text/html', htm: 'text/html', xhtml: 'application/xhtml+xml', svg: 'image/svg+xml',
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif', bmp: 'image/bmp', ico: 'image/x-icon',
+  heic: 'image/heic', heif: 'image/heif', pdf: 'application/pdf', mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm',
+  ogv: 'video/ogg', mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg',
+  flac: 'audio/flac', json: 'application/json', csv: 'text/csv', tsv: 'text/tab-separated-values', css: 'text/css', js: 'text/javascript',
+  mjs: 'text/javascript', xml: 'application/xml', txt: 'text/plain' };
+const extOf = (file) => { const base = path.basename(file).toLowerCase(); const dot = base.lastIndexOf('.'); return dot > 0 ? base.slice(dot + 1) : base; };
+const mimeOf = (file) => { const type = MIME[extOf(file)] || 'application/octet-stream'; return type.startsWith('text/') || type.endsWith('json') || type.endsWith('xml') ? `${type}; charset=utf-8` : type; };
+const fileText = (v) => typeof v === 'string' && v.length > 0 && v.length <= 4096 && !v.includes('\0');
+async function sniffKind(file) {
+  let handle;
+  try {
+    handle = await fs.promises.open(file, 'r');
+    const { buffer, bytesRead } = await handle.read(Buffer.alloc(8192), 0, 8192, 0);
+    const head = buffer.subarray(0, bytesRead);
+    if (head.includes(0)) return 'binary';
+    try { new TextDecoder('utf-8', { fatal: true }).decode(bytesRead === 8192 ? head.subarray(0, 8188) : head); return 'text'; } catch { return 'binary'; }
+  } catch { return 'binary'; } finally { await handle?.close(); }
+}
+async function viewFile(user, query) {
+  const asked = query.get('path');
+  const from = query.get('from');
+  if (!fileText(asked)) return { status: 400, body: { error: 'invalid path' } };
+  const home = os.homedir();
+  let target = asked.trim();
+  if (target === '~' || target.startsWith('~/')) target = home + target.slice(1);
+  if (!path.isAbsolute(target)) {
+    const base = from != null && SESSION_ID.test(from) ? await sessionDir(user, from) : null;
+    target = path.join(base || home, target);
+  }
+  target = path.resolve(target);
+  let st;
+  try { st = await fs.promises.stat(target); } catch (e) {
+    const known = fileError(e);
+    if (known) return { status: known[0], body: { error: known[1], path: target } };
+    throw e;
+  }
+  if (st.isDirectory()) return { status: 200, body: { type: 'dir', path: target, home } };
+  if (!st.isFile()) return { status: 400, body: { error: 'not a regular file', path: target } };
+  const ext = extOf(target);
+  const kind = KIND_OF_EXT.get(ext) || await sniffKind(target);
+  return { status: 200, body: { type: 'file', path: target, name: path.basename(target), dir: path.dirname(target), size: st.size, mtime: Math.floor(st.mtimeMs / 1000), kind, ext, home } };
+}
+async function sendRaw(req, res, query) {
+  const asked = query.get('path');
+  if (!fileText(asked) || !path.isAbsolute(asked)) return sendJson(res, { status: 400, body: { error: 'invalid path' } });
+  const file = path.resolve(asked);
+  let st;
+  try { st = await fs.promises.stat(file); } catch (e) {
+    const known = fileError(e);
+    if (known) return sendJson(res, { status: known[0], body: { error: known[1] } });
+    throw e;
+  }
+  if (!st.isFile()) return sendJson(res, { status: 400, body: { error: 'not a regular file' } });
+  const size = st.size;
+  let start = 0, end = size - 1, status = 200;
+  const range = req.headers.range;
+  if (typeof range === 'string' && size > 0) {
+    const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+    if (m && (m[1] || m[2])) {
+      if (m[1]) { start = +m[1]; end = m[2] ? Math.min(+m[2], size - 1) : size - 1; } else { start = Math.max(0, size - +m[2]); }
+      if (start > end || start >= size) {
+        res.writeHead(416, { 'content-range': `bytes */${size}`, 'cache-control': 'private, no-store' });
+        return res.end();
+      }
+      status = 206;
+    }
+  }
+  const name = path.basename(file);
+  const type = query.get('text') === '1' ? 'text/plain; charset=utf-8' : mimeOf(file);
+  const headers = {
+    'content-type': type,
+    'content-length': size ? end - start + 1 : 0,
+    'accept-ranges': 'bytes',
+    'cache-control': 'private, no-store, no-transform',
+    'x-content-type-options': 'nosniff',
+    'content-disposition': `${query.get('download') === '1' ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(name)}`,
+    'last-modified': st.mtime.toUTCString(),
+  };
+  // a PDF is the exception: a sandboxed document gets no PDF viewer, and the browser's viewer runs no script of the file's as this site
+  if (type !== 'application/pdf') headers['content-security-policy'] = 'sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox';
+  if (status === 206) headers['content-range'] = `bytes ${start}-${end}/${size}`;
+  res.writeHead(status, headers);
+  if (req.method === 'HEAD' || !size) return res.end();
+  const stream = fs.createReadStream(file, { start, end });
+  stream.on('error', () => res.destroy());
+  res.on('close', () => stream.destroy());
+  stream.pipe(res);
+}
+
 async function listScratch(user) {
   let out;
   try { out = await tmux(['list-sessions', '-F', '#{session_id}\t#{@tmux_web_scratch}\t#{pid}:#{session_created}\t#{session_name}\t#{pane_current_path}\t#{session_attached}\t#{session_activity}\t#{@tmux_web_owner}']); } catch { out = ''; }
@@ -1378,6 +1488,8 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/scratch' && req.method === 'GET') return sendJson(res, await listScratch(user));
     if (pathname === '/api/files' && req.method === 'GET') return sendJson(res, await listFiles(user, searchParams));
     if (pathname === '/api/files' && req.method === 'POST') return sendJson(res, await changeFiles(req));
+    if (pathname === '/api/files/view') return req.method === 'GET' ? sendJson(res, await viewFile(user, searchParams)) : send(res, 405, 'method not allowed');
+    if (pathname === '/api/files/raw') return ['GET', 'HEAD'].includes(req.method) ? sendRaw(req, res, searchParams) : send(res, 405, 'method not allowed');
     // every /api/sessions/:id... route: id syntax, method, then what this person may do with that session, and only then the body
     const sub = /^\/api\/sessions\/([^/]+)(?:\/(input|history|transcript|share))?$/.exec(pathname);
     if (sub) {

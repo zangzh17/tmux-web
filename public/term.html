@@ -19,7 +19,7 @@
     transform: translateY(var(--vt, 0px)); display: flex; flex-direction: column;
     padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
   }
-  header { flex: none; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 8px; background: var(--bar); border-bottom: 1px solid var(--line); }
+  header { flex: none; display: grid; grid-template-columns: auto minmax(96px, 1fr) minmax(0, auto); align-items: center; gap: 8px; padding: 6px 8px; background: var(--bar); border-bottom: 1px solid var(--line); }
   header a, header button { color: var(--text); text-decoration: none; }
   #back { display: flex; align-items: center; height: 36px; padding: 0 6px; border-radius: 10px; color: var(--accent); font-weight: 600; white-space: nowrap; }
   .session-title { min-width: 0; margin: 0; }
@@ -243,19 +243,19 @@
   .copy-code { padding: 4px 9px; border-radius: 6px; cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
   .copy-code:hover { color: var(--text); }
   /* pre and its code share one font and line-height, otherwise the first line sits low. */
-  #text-output pre { margin: 0; padding: 10px 12px; overflow-x: auto; background: var(--code); font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-  #text-output pre code { padding: 0; background: none; color: #e4dfd2; font: inherit; white-space: inherit; overflow-wrap: inherit; }
+  :is(#text-output, #viewer-body) pre { margin: 0; padding: 10px 12px; overflow-x: auto; background: var(--code); font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+  :is(#text-output, #viewer-body) pre code { padding: 0; background: none; color: #e4dfd2; font: inherit; white-space: inherit; overflow-wrap: inherit; }
   .step pre { margin: 0; border-radius: 8px; }
   .res pre { max-height: 55vh; margin-top: 6px; border-radius: 8px; overflow-y: auto; }
-  #text-output .hljs-comment, #text-output .hljs-quote { color: #8a8478; font-style: italic; }
-  #text-output .hljs-keyword, #text-output .hljs-selector-tag, #text-output .hljs-doctag, #text-output .hljs-template-tag, #text-output .hljs-template-variable { color: #d896c8; }
-  #text-output .hljs-string, #text-output .hljs-regexp, #text-output .hljs-addition, #text-output .hljs-meta .hljs-string { color: #a9c47c; }
-  #text-output .hljs-number, #text-output .hljs-literal, #text-output .hljs-bullet { color: #e0a56b; }
-  #text-output .hljs-title, #text-output .hljs-title.function_, #text-output .hljs-section { color: #82b4dc; }
-  #text-output .hljs-built_in, #text-output .hljs-type, #text-output .hljs-class .hljs-title, #text-output .hljs-title.class_ { color: #e6c07b; }
-  #text-output .hljs-attr, #text-output .hljs-attribute, #text-output .hljs-variable, #text-output .hljs-name, #text-output .hljs-tag, #text-output .hljs-deletion, #text-output .hljs-selector-class, #text-output .hljs-selector-id { color: #e4858f; }
-  #text-output .hljs-symbol, #text-output .hljs-link, #text-output .hljs-params, #text-output .hljs-meta { color: #78bfc6; }
-  #text-output .hljs-emphasis { font-style: italic; } #text-output .hljs-strong { font-weight: 700; }
+  :is(#text-output, #viewer-body) .hljs-comment, :is(#text-output, #viewer-body) .hljs-quote { color: #8a8478; font-style: italic; }
+  :is(#text-output, #viewer-body) .hljs-keyword, :is(#text-output, #viewer-body) .hljs-selector-tag, :is(#text-output, #viewer-body) .hljs-doctag, :is(#text-output, #viewer-body) .hljs-template-tag, :is(#text-output, #viewer-body) .hljs-template-variable { color: #d896c8; }
+  :is(#text-output, #viewer-body) .hljs-string, :is(#text-output, #viewer-body) .hljs-regexp, :is(#text-output, #viewer-body) .hljs-addition, :is(#text-output, #viewer-body) .hljs-meta .hljs-string { color: #a9c47c; }
+  :is(#text-output, #viewer-body) .hljs-number, :is(#text-output, #viewer-body) .hljs-literal, :is(#text-output, #viewer-body) .hljs-bullet { color: #e0a56b; }
+  :is(#text-output, #viewer-body) .hljs-title, :is(#text-output, #viewer-body) .hljs-title.function_, :is(#text-output, #viewer-body) .hljs-section { color: #82b4dc; }
+  :is(#text-output, #viewer-body) .hljs-built_in, :is(#text-output, #viewer-body) .hljs-type, :is(#text-output, #viewer-body) .hljs-class .hljs-title, :is(#text-output, #viewer-body) .hljs-title.class_ { color: #e6c07b; }
+  :is(#text-output, #viewer-body) .hljs-attr, :is(#text-output, #viewer-body) .hljs-attribute, :is(#text-output, #viewer-body) .hljs-variable, :is(#text-output, #viewer-body) .hljs-name, :is(#text-output, #viewer-body) .hljs-tag, :is(#text-output, #viewer-body) .hljs-deletion, :is(#text-output, #viewer-body) .hljs-selector-class, :is(#text-output, #viewer-body) .hljs-selector-id { color: #e4858f; }
+  :is(#text-output, #viewer-body) .hljs-symbol, :is(#text-output, #viewer-body) .hljs-link, :is(#text-output, #viewer-body) .hljs-params, :is(#text-output, #viewer-body) .hljs-meta { color: #78bfc6; }
+  :is(#text-output, #viewer-body) .hljs-emphasis { font-style: italic; } :is(#text-output, #viewer-body) .hljs-strong { font-weight: 700; }
   /* ---- Read dialog: talk to Claude from the conversation view */
   #composer { flex: none; position: relative; padding: 8px 10px; background: var(--bar); border-top: 1px solid var(--line); }
   #text-dialog.typing #peek-screen { max-height: calc(var(--vh, 100dvh) * 0.16); } /* the keyboard is up: the heading must keep its room */
@@ -321,7 +321,7 @@
   .msg.user.pending .bubble { opacity: 0.6; }
   #text-dialog.typing #composer { padding-bottom: 8px; }
   /* The header buttons must never wrap onto a second row (it wastes a whole bar of height), so labels go first. */
-  @media (max-width: 720px) {
+  @media (max-width: 920px) { /* an iPad upright too: with the words the session's name was squeezed to nothing */
     .tools span { display: none; }
   }
   @media (max-width: 540px) {
@@ -500,6 +500,111 @@
   :is(.dev-phone, .dev-tablet) .fbtn { width: 42px; height: 42px; }
   :is(.dev-phone, .dev-tablet) .f-crumbs button { padding: 11px 6px; }
   :is(.dev-phone, .dev-tablet) .f-crumbs button[aria-current] { padding: 11px 9px; }
+
+  /* ---- Export: a small menu under its button (term.js moves it into the Read view while that is open) */
+  #export-menu { position: absolute; z-index: 30; width: min(330px, calc(100% - 16px)); padding: 6px; border: 1px solid var(--line); border-radius: 14px; background: var(--bar); box-shadow: 0 14px 40px #000c; animation: pop-in 0.14s ease-out; }
+  #export-menu[hidden] { display: none; }
+  #export-menu button[role="menuitem"] { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 58px; padding: 8px 12px 8px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  #export-menu button[role="menuitem"] + button { margin-top: 2px; }
+  #export-menu button[role="menuitem"]:hover, #export-menu button[role="menuitem"]:focus-visible, #export-menu button[role="menuitem"]:active { background: var(--key); }
+  #export-menu svg { flex: none; width: 22px; height: 22px; color: var(--accent); }
+  #export-menu span { display: grid; gap: 3px; min-width: 0; }
+  #export-menu b { font: 600 14.5px/1.2 system-ui, -apple-system, "PingFang SC", sans-serif; }
+  #export-menu small { color: var(--muted); font: 12px/1.3 system-ui, -apple-system, "PingFang SC", sans-serif; }
+
+  /* ---- View a file: the path (typed, pasted or recent) */
+  #view-open { width: min(500px, calc(100% - 24px)); }
+  .vo-row { display: flex; gap: 8px; }
+  #view-path { flex: 1; min-width: 0; height: 46px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: 15px/1.2 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .dev-phone #view-path, .dev-tablet #view-path { font-size: 16px; } /* iOS zooms into smaller text when it gets the focus */
+  #view-path:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px #6ea8ff33; }
+  .vo-go { flex: none; min-width: 74px; height: 46px; border: 0; border-radius: 10px; background: var(--accent); color: #0b0e14; font: 650 15px/1 system-ui, -apple-system, sans-serif; cursor: pointer; touch-action: manipulation; }
+  .vo-paste { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 48px; margin-top: 10px; padding: 6px 12px; border: 1px dashed #3a4357; border-radius: 10px; background: var(--key); color: var(--text); font: 600 14px/1.3 system-ui, -apple-system, sans-serif; cursor: pointer; touch-action: manipulation; }
+  .vo-paste:active { background: var(--key-on); }
+  .vo-paste svg { flex: none; width: 20px; height: 20px; color: var(--accent); }
+  #view-hint { margin-top: 10px; font-size: 12.5px; line-height: 1.55; }
+  #view-hint code { color: var(--text); font: 12px ui-monospace, "SF Mono", Menlo, monospace; }
+  #view-error { margin-top: 10px; color: var(--danger); font-size: 13.5px; }
+  #view-error button { margin-left: 6px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--key); color: var(--text); font: 600 13px/1 system-ui, sans-serif; cursor: pointer; }
+  #view-recent-box h3 { margin: 18px 0 6px; color: var(--muted); font: 650 11.5px/1 system-ui, -apple-system, sans-serif; letter-spacing: 0.06em; text-transform: uppercase; }
+  #view-recent { max-height: 32vh; margin: 0; padding: 0; overflow-y: auto; list-style: none; overscroll-behavior: contain; }
+  #view-recent button { display: grid; gap: 2px; width: 100%; min-height: 44px; padding: 6px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--text); text-align: left; cursor: pointer; touch-action: manipulation; }
+  #view-recent button:hover, #view-recent button:active, #view-recent button:focus-visible { background: var(--key); }
+  #view-recent b { overflow: hidden; font: 600 14px/1.25 system-ui, -apple-system, "PingFang SC", sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+  #view-recent span { overflow: hidden; color: var(--muted); font: 11.5px/1.25 ui-monospace, "SF Mono", Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ---- the viewer: a file on the whole screen, rendered as it is meant to be read */
+  #viewer { position: fixed; inset: auto; top: var(--vt, 0px); left: 0; width: 100%; max-width: none; height: var(--vh, 100dvh); max-height: none; margin: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); border: 0; border-radius: 0; background: var(--bg); --surface: #171c26; --code: #0f131b; --code-inline: #f0b989; }
+  #viewer[open] { display: flex; flex-direction: column; overflow: hidden; }
+  .kbd #viewer { padding-bottom: 0; }
+  .v-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 8px; background: var(--bar); border-bottom: 1px solid var(--line); }
+  .v-title { flex: 1 1 auto; min-width: 64px; display: grid; gap: 3px; padding-left: 4px; }
+  #viewer-name { overflow: hidden; color: var(--text); font: 650 14.5px/1.2 system-ui, -apple-system, "PingFang SC", sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+  #viewer-where { overflow: hidden; color: var(--muted); font: 11.5px/1.2 ui-monospace, "SF Mono", Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; } /* a long path loses its start, not its end */
+  .v-tools { flex: 0 1 auto; min-width: 0; display: flex; gap: 6px; padding: 2px 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .v-tools::-webkit-scrollbar { display: none; }
+  .v-btn { flex: none; display: inline-grid; place-items: center; min-width: 40px; height: 40px; padding: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--key); color: var(--text); text-decoration: none; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  .v-btn[hidden] { display: none; }
+  .v-btn svg { width: 19px; height: 19px; }
+  .v-btn:active { background: var(--key-on); }
+  .v-btn.v-word { padding: 0 12px; font: 600 14px/1 system-ui, -apple-system, sans-serif; }
+  .v-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: #18263f; }
+  .v-btn.v-close { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); font-weight: 650; }
+  #viewer-status { flex: none; padding: 7px 12px; background: var(--bar); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+  #viewer-status.error { color: var(--danger); }
+  #viewer-status a { color: var(--accent); }
+  #viewer-body { position: relative; flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; outline: none; }
+  #viewer-body p { color: inherit; font-size: inherit; line-height: inherit; } /* not the dialogs' muted 14px */
+  .v-loading { padding: 40px 16px; color: var(--muted); font-size: 13px; text-align: center; }
+  /* Markdown: a readable column, GitHub-like proportions */
+  .v-md.md { max-width: 880px; margin: 0 auto; padding: 18px 18px 56px; color: var(--text); font: 15.5px/1.7 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; overflow-wrap: break-word; }
+  .v-md.md h1 { margin: 0.9em 0 0.5em; padding-bottom: 0.3em; border-bottom: 1px solid var(--line); font-size: 1.8em; line-height: 1.25; }
+  .v-md.md h2 { margin: 1.4em 0 0.6em; padding-bottom: 0.3em; border-bottom: 1px solid var(--line); font-size: 1.42em; line-height: 1.3; }
+  .v-md.md h3 { font-size: 1.2em; } .v-md.md h4 { font-size: 1.05em; }
+  .v-md.md > :first-child { margin-top: 0; }
+  .v-md img { max-width: 100%; height: auto; border-radius: 6px; vertical-align: middle; }
+  .v-md a img { border-radius: 0; }
+  .v-md .code-block { margin: 0 0 1em; }
+  .v-md li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.3em; }
+  .v-md input[type="checkbox"] { margin: 0 0.45em 0 0; vertical-align: -1px; accent-color: var(--accent); }
+  .v-md table { font-size: 0.92em; }
+  .v-md tr:nth-child(even) td { background: #ffffff06; }
+  .v-md :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: 12px; }
+  .v-front { margin: 0 0 1.2em; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 13px; }
+  .v-front > summary { padding: 7px 12px; cursor: pointer; }
+  .v-front pre { margin: 0 !important; border-radius: 0 0 10px 10px; }
+  /* source and text files: line numbers (unless wrapped), the asked line marked */
+  .v-codewrap { display: flex; min-width: min-content; min-height: 100%; background: var(--code); font: 13px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .dev-phone .v-codewrap { font-size: 12.5px; }
+  .v-gutter { position: sticky; left: 0; z-index: 1; flex: none; padding: 10px 10px 40px 12px; border-right: 1px solid var(--line); background: var(--code); color: #4b5367; text-align: right; white-space: pre; user-select: none; -webkit-user-select: none; }
+  #viewer-body pre.v-code { position: relative; flex: 1; margin: 0; padding: 10px 14px 40px; overflow: visible; border-radius: 0; background: none; color: #d7dce5; font: inherit; white-space: pre; overflow-wrap: normal; tab-size: 4; user-select: text; -webkit-user-select: text; }
+  .v-codewrap.wrap { min-width: 0; }
+  .v-codewrap.wrap .v-gutter { display: none; }
+  #viewer-body .v-codewrap.wrap pre.v-code { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .v-codewrap.wrap .v-mark { display: none; } /* wrapped lines no longer sit at their number's height */
+  .v-mark { position: absolute; left: 0; right: 0; border-left: 3px solid var(--accent); background: #6ea8ff24; pointer-events: none; }
+  /* images: on a checkerboard (transparency shows), fitted to the screen; a tap or Fit shows it at its own size, two fingers zoom */
+  .v-img { position: absolute; inset: 0; display: flex; overflow: auto; background: #1b1f27 repeating-conic-gradient(#20242d 0 25%, #282d37 0 50%) 0 0 / 22px 22px; touch-action: pan-x pan-y; }
+  .v-img img { display: block; flex: none; margin: auto; }
+  .v-img.fit img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .v-img.fit.svg img { width: 100%; height: 100%; }
+  /* HTML runs in a sandbox of its own (no access to this site); PDF and media use the browser's own viewer */
+  .v-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
+  .v-frame.pdf { background: #525659; }
+  .v-media { position: absolute; inset: 0; display: grid; place-items: center; padding: 12px; }
+  .v-media video { max-width: 100%; max-height: 100%; border-radius: 8px; background: #000; }
+  .v-media audio { width: min(560px, 100%); }
+  /* CSV: a table with its header and row numbers kept in view */
+  .v-table { border-collapse: separate; border-spacing: 0; font: 12.5px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .v-table th, .v-table td { max-width: 420px; padding: 5px 10px; overflow: hidden; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+  .v-table th { position: sticky; top: 0; z-index: 2; background: var(--surface); color: var(--text); font-weight: 650; }
+  .v-table .rn { position: sticky; left: 0; z-index: 1; color: #4b5367; background: var(--bg); text-align: right; }
+  .v-table th.rn { z-index: 3; background: var(--surface); }
+  .v-table tr:nth-child(even) td:not(.rn) { background: #ffffff05; }
+  .v-note { padding: 8px 12px; color: var(--muted); font-size: 12.5px; }
+  .v-info { max-width: 440px; margin: 48px auto; padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--bar); color: var(--muted); font-size: 13.5px; line-height: 1.6; text-align: center; }
+  .v-info b { display: block; margin-bottom: 6px; color: var(--text); font-size: 15px; overflow-wrap: anywhere; }
+  .v-info a { display: inline-block; margin-top: 14px; padding: 10px 16px; border-radius: 10px; background: var(--accent); color: #0b0e14; font-weight: 650; text-decoration: none; }
 </style>
 </head>
 <body>
@@ -522,9 +627,9 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2zM22 4h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8z"/></svg>
         <span>Read</span>
       </button>
-      <button class="hbtn" id="copy-open" type="button" title="Copy: the text as an editable copy (nothing typed there reaches the terminal)" aria-label="Copy" aria-controls="copy-panel" aria-expanded="false">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></svg>
-        <span>Copy</span>
+      <button class="hbtn" id="copy-open" type="button" title="Export: the text as plain text to copy, or view a file on this machine" aria-label="Export" aria-haspopup="menu" aria-controls="export-menu" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-8.5 8.5M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>
+        <span>Export</span>
       </button>
       <button class="hbtn" id="upload" type="button" title="Upload files or a folder, then paste their paths" aria-label="Upload files" aria-haspopup="dialog" aria-controls="upload-dialog">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7 9l5-5 5 5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
@@ -550,6 +655,10 @@
   </header>
   <div id="notice" role="status" aria-live="polite" hidden></div>
   <div id="clipboard-status" role="status" aria-live="polite" hidden></div>
+  <div id="export-menu" role="menu" aria-label="Export" hidden>
+    <button type="button" role="menuitem" id="export-text"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 10h16M4 14h11M4 18h7"/></svg><span><b>Plain text</b><small>The text as an editable copy, to copy from</small></span></button>
+    <button type="button" role="menuitem" id="export-view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4M13 3l5 5v2M13 3v5h5"/><circle cx="16.5" cy="16.5" r="3"/><path d="m21 21-2.4-2.4"/></svg><span><b>View a file</b><small>Markdown, HTML, images, PDF… on this machine</small></span></button>
+  </div>
   <div id="term-wrap">
     <iframe id="t" title="Terminal"></iframe>
     <div class="pager" id="pager-left" role="group" aria-label="Page up and down"></div>
@@ -614,6 +723,36 @@
   <p class="f-status" id="files-status" role="status" hidden></p>
   <ul class="f-list" id="files-list"></ul>
 </dialog>
+<dialog id="view-open" aria-labelledby="view-open-heading">
+  <h2 id="view-open-heading">View a file</h2>
+  <form id="view-open-form" class="vo-row">
+    <label class="sr-only" for="view-path">Path</label>
+    <input id="view-path" type="text" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" placeholder="~/notes/plan.md" aria-describedby="view-hint">
+    <button id="view-go" type="submit" class="vo-go">Open</button>
+  </form>
+  <button id="view-paste" type="button" class="vo-paste"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 11h6M9 15h4"/></svg>Paste a path and open it</button>
+  <p id="view-hint">An absolute path, <code>~/…</code>, or one relative to this session's folder. <code>file.py:42</code> opens at line 42.</p>
+  <p id="view-error" role="alert" hidden></p>
+  <div id="view-recent-box" hidden><h3>Recent</h3><ul id="view-recent"></ul></div>
+  <div class="dialog-actions"><button id="view-cancel" type="button">Cancel</button></div>
+</dialog>
+<dialog id="viewer" aria-labelledby="viewer-name">
+  <div class="v-head">
+    <button id="viewer-back" type="button" class="v-btn" aria-label="Back to the previous file" title="Back to the previous file" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
+    <div class="v-title"><b id="viewer-name"></b><span id="viewer-where"></span></div>
+    <div class="v-tools" id="viewer-tools">
+      <button id="viewer-source" type="button" class="v-btn" aria-pressed="false" aria-label="Source" title="Show the source text" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M13.5 4l-3 16"/></svg></button>
+      <button id="viewer-wrap" type="button" class="v-btn" aria-pressed="true" aria-label="Wrap long lines" title="Wrap long lines" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M3 12h15a3 3 0 0 1 0 6h-4m2-2-2 2 2 2M3 18h7"/></svg></button>
+      <button id="viewer-fit" type="button" class="v-btn v-word" title="Fit the screen, or show the image at its own size" hidden>Fit</button>
+      <button id="viewer-copy" type="button" class="v-btn" aria-label="Copy the path" title="Copy the path"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></svg></button>
+      <a id="viewer-newtab" class="v-btn" target="_blank" rel="noopener" aria-label="Open in a new tab" title="Open the file itself in a new tab" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-8.5 8.5M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg></a>
+      <button id="viewer-reload" type="button" class="v-btn" aria-label="Reload" title="Read the file again"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
+    </div>
+    <button id="viewer-close" type="button" class="v-btn v-word v-close">Close</button>
+  </div>
+  <div id="viewer-status" role="status" aria-live="polite" hidden></div>
+  <div id="viewer-body" tabindex="0"></div>
+</dialog>
 <dialog id="text-dialog" aria-labelledby="text-heading" aria-describedby="text-instruction">
   <div class="text-heading">
     <a id="text-back" class="text-back" href="./" title="Detach: back to the session list (the session keeps running)" aria-label="Detach and return to the session list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg><span>Detach</span></a>
@@ -621,7 +760,7 @@
     <div class="text-tools" id="text-tools">
       <button id="text-files" type="button" aria-label="Files" title="Files: browse folders, insert a path into the message" aria-haspopup="dialog" aria-controls="files-dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
       <button id="text-scratch" type="button" aria-label="Scratch terminal" title="Scratch terminal over this view" aria-controls="scratch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="16" rx="3"/><path d="m6.5 9 3 3-3 3M12 15h4"/></svg></button>
-      <button id="text-copy" type="button" aria-label="Copy" title="Copy: the conversation as editable text" aria-controls="copy-panel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></svg></button>
+      <button id="text-copy" type="button" aria-label="Export" title="Export: the conversation as plain text, or view a file" aria-haspopup="menu" aria-controls="export-menu" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-8.5 8.5M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg></button>
       <button id="text-fmt" type="button" aria-pressed="false" aria-expanded="false" aria-controls="text-fmt-panel" aria-label="Text size and width" title="Text size and width"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 19 8.5 5h1L15 19M5.2 14h7.6M16 19l3.2-8h.6L23 19M17 16.5h5"/></svg></button>
       <button id="text-refresh" type="button" aria-label="Refresh" title="Load the latest output"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
     </div>
@@ -711,6 +850,6 @@
     <button id="upload-paste" class="primary" type="button" hidden>Paste</button>
   </div>
 </dialog>
-<script src="term.js?v=20261101-mobile"></script>
+<script src="term.js?v=20261101-viewer"></script>
 </body>
 </html>

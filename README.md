@@ -6,10 +6,11 @@ Returning to the list removes the terminal iframe and detaches that browser clie
 disconnects it (the ttyd ping handles abrupt network loss). The tmux session keeps running.
 Inside a session, tap its title to edit the name; Enter or blur saves automatically, and Escape cancels.
 **Read** (book icon) opens a read-only reading view with native scrolling, wrapping and text selection; the live terminal
-keeps running underneath. **Copy** (next to it) opens an editable copy of the text instead (below). On a phone the
+keeps running underneath. **Export** (next to it, the box-and-arrow icon) offers **Plain text** (an editable copy of the text, below)
+and **View a file** (a file of this machine, rendered; below). On a phone the
 header buttons are icons only and always stay on one row (when they do not fit, the row scrolls sideways and fades at the edge
 that has more; on a phone the rarely used A−, A+ and Close come last); the toolbar of the view is icons too: Files, Scratch,
-Copy, Aa, Refresh, which scroll the same way, and **Done** (a word, so it is not taken for the session's Close), which never scrolls
+Export, Aa, Refresh, which scroll the same way, and **Done** (a word, so it is not taken for the session's Close), which never scrolls
 away. It exists because the live terminal has no usable history for Claude Code (it runs on tmux's
 alternate screen, so `history_size` is 0, and it draws at the width it had when it printed).
 
@@ -30,7 +31,7 @@ terminal and it stays there until the page is opened again; a plain shell opens 
   It opens at the newest message; scroll up to load earlier ones (150 at a time), tap **Refresh** for new ones.
   **Render** is on every time Read opens; **View: Rendered** in the Aa panel switches Markdown/math/highlighting off for the view
   that is open (it used to be an eye button in the toolbar, too easily taken for the way out).
-* **Copy** (on the terminal page's header, in the Read view's toolbar, and in the scratch terminal) opens a sheet like the
+* **Plain text** (Export on the terminal page's header and in the Read view's toolbar; Copy in the scratch terminal) opens a sheet like the
   scratch terminal's with an editable text box: change, cut and select freely, then **Copy selection** or **Copy all**; nothing
   typed there reaches a terminal, and the key bar is off while it is open. The text comes from the **Terminal** (tmux's scrollback,
   up to 5000 lines; a Claude session's is just its screen), the **Conversation** (Claude's, as plain text: your messages and
@@ -164,7 +165,30 @@ browser ─► Cloudflare Access (login) ─► cloudflared tunnel ─► Caddy 
   Scratch here, Insert path, Copy path, Rename and Delete (asks first; a folder goes with everything in it); for the folder shown:
   **cd here** (shells only), Insert path, Scratch here, New folder, `.hidden`, `~`. `GET /api/files?path=` (or `?from=<session>`)
   lists a folder, folders first; `POST /api/files {op: mkdir|rename|delete, path, name, to}` changes one entry (a single name,
-  rename never replaces anything).
+  rename never replaces anything). A tap on a file opens it in the viewer (below); ⋯ has View too.
+* **View a file** (Export, then View a file) shows a file of this machine without a terminal: type a path (absolute, `~/…`, or
+  relative to the session's folder), tap **Paste a path and open it** (reads the clipboard; quotes, `file://`, shell escapes
+  and a trailing `:42` or `#L42` line are understood), or pick one of the eight recent ones. The viewer takes the whole screen
+  (over the Read view too) with Close, Copy path, Reload, Source (the text behind a rendered file) and, where it helps, Wrap,
+  Fit and Open in a new tab:
+  * **Markdown** as GitHub would: headings, tables, task lists, code highlighting, KaTeX math, front matter folded away, its
+    own images from this machine; a link to another file opens it here (Back returns), `#links` scroll. Sanitised (DOMPurify):
+    no scripts, styles or forms.
+  * **HTML** in a sandboxed iframe (`allow-scripts`, never `allow-same-origin`): it runs, but in an origin of its own, with no
+    cookies and no way into this page or its API. Its stylesheets (and their `url()`s and `@import`s), scripts and images from
+    this machine are fetched by the page and put inside it first, since a sandboxed page's own requests would not carry the
+    Access sign-in in every browser; a link to another file comes back to the viewer.
+  * **Images** (and SVG, shown as an image so its scripts never run) fitted on a checkerboard; Fit, a double tap or a double
+    click shows the real size, two fingers zoom. **PDF** in the browser's viewer (a phone may show only page one: Open in a new
+    tab), **video/audio** in the browser's player, **CSV/TSV** as a table with its header and row numbers kept in view, **JSON**
+    pretty-printed, any other text with line numbers and highlighting (a line asked for is marked and scrolled to), anything
+    else as a Download link. Text over 4 MB is shown cut, with a note.
+  `GET /api/files/view?path=&from=<session>` resolves the path and says what it is (`kind`: markdown, html, image, svg, pdf,
+  video, audio, json, csv, text or binary; a file without a known extension is looked at). `GET|HEAD /api/files/raw?path=`
+  sends the bytes (one byte range; iOS needs it for video) with `Cache-Control: private, no-store` (Cloudflare would otherwise
+  keep a `.png` at its edge for anyone else behind the Access app), `nosniff`, and `Content-Security-Policy: sandbox …` on all
+  but PDF (a sandboxed document gets no PDF viewer), so a file opened on its own runs nothing as this site; `&text=1` sends
+  it as text/plain, `&download=1` as an attachment. Both work as the account's Unix user, for whoever may enter the account.
 * `POST /api/sessions/:id/input` types into the session's Claude pane: `{instance, text}` or `{instance, key}`. It needs the
   same Access token, matching Origin, JSON body and session `instance` as rename/close, and it refuses (409) any pane that is
   not running Claude, so it cannot be used as a general way to type into a shell. `text` is control-character-stripped (so pasted
