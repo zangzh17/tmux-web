@@ -1102,7 +1102,8 @@ async function claudeContext(paneId, panePid, cwd) {
 //   more recent items exist while start + items.length < total.
 //   ?before=I&count=N -> [I-N, I)   (I clamped to total; default I = total, i.e. the newest N)
 //   ?after=I&count=N  -> [I, I+N)   (wins over `before`; default N = 500, so normally [I, total))
-//   count: default 150, max 500. 404 when the pane isn't running Claude (TMUX_WEB_CLAUDE_COMMAND) or has no transcript.
+//   count: default 150, max 500. 404 when the pane isn't running Claude (TMUX_WEB_CLAUDE_COMMAND) or has no transcript; a
+//   Claude whose own record names a conversation with no file yet (nothing sent so far) answers an empty list instead.
 //   busy / asking: read from the pane's visible screen (one extra capture-pane per successful request; false if that fails):
 //   busy = a turn is running, asking = a permission prompt is waiting for a key.
 // Claude Code's own wording on screen. It has changed between versions (older: "(12s · esc to interrupt)"), so match the
@@ -1125,8 +1126,15 @@ async function sessionTranscript(id, query) {
     throw e;
   }
   if (!CLAUDE_COMMAND.test(command || '')) return { status: 404, body: { error: 'no Claude conversation in this session' } };
-  const file = await paneTranscript(pane, +panePid, cwd);
-  if (!file) return { status: 404, body: { error: 'no Claude transcript found' } };
+  const mine = await paneConversation(pane, +panePid);
+  const file = mine ? await transcriptOf(mine.sessionId, mine.cwd || cwd) : await newestTranscript(cwd || '');
+  if (!file) {
+    // Claude says which conversation it is showing but has not written it yet: Claude Code makes the file with the first
+    // message (a new session, or right after /clear). That is an empty conversation, not a missing one, so the Read view
+    // keeps its message box and the first message can be sent from there; later polls find the file under the same name.
+    if (!mine) return { status: 404, body: { error: 'no Claude transcript found' } };
+    return { status: 200, body: { id, session, file: mine.sessionId, total: 0, start: 0, items: [], ...(await screenState(pane)) } };
+  }
   const entry = claudeEntry(file);
   const run = entry.chain.then(() => advance(entry, file));
   entry.chain = run.catch(() => {});
@@ -1139,9 +1147,12 @@ async function sessionTranscript(id, query) {
   let start, end;
   if (after !== undefined) { start = Math.min(after, total); end = Math.min(total, start + count); }
   else { end = Math.min(before ?? total, total); start = Math.max(0, end - count); }
-  const screen = await tmux(['capture-pane', '-p', '-t', pane]).catch(() => '');
   return { status: 200, body: { id, session, file: path.basename(file, '.jsonl'), total, start, items: entry.items.slice(start, end),
-    busy: SCREEN_BUSY.test(screen), asking: SCREEN_ASKING.test(screen) } };
+    ...(await screenState(pane)) } };
+}
+async function screenState(pane) {
+  const screen = await tmux(['capture-pane', '-p', '-t', pane]).catch(() => '');
+  return { busy: SCREEN_BUSY.test(screen), asking: SCREEN_ASKING.test(screen) };
 }
 
 // POST /api/sessions/:id/input { instance, text } | { instance, key } -> { ok: true }: type into the session's Claude pane.

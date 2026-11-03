@@ -254,9 +254,18 @@ test('two Claude panes in one directory each show their own conversation, never 
     assert.equal(a.status, 200); assert.equal(a.body.file, uuidA); assert.equal(first(a), 'conversation A');
     assert.equal(b.status, 200); assert.equal(b.body.file, uuidB); assert.equal(first(b), 'conversation B');
 
-    // /clear in A: the record moves to a new conversation that has no file yet -> 404, not B's conversation
-    record(pidA, paneA, nameA, '33333333-3333-4333-8333-333333333333');
-    assert.equal((await transcript()).status, 404);
+    // /clear in A (or a new session): the record moves to a conversation that has no file yet -> an empty conversation under
+    // its own name (so the Read view keeps its message box), never B's conversation; the first message then shows up in it
+    const uuidC = '33333333-3333-4333-8333-333333333333';
+    record(pidA, paneA, nameA, uuidC);
+    const empty = await transcript();
+    assert.equal(empty.status, 200);
+    assert.deepEqual({ file: empty.body.file, total: empty.body.total, start: empty.body.start, items: empty.body.items, busy: empty.body.busy, asking: empty.body.asking },
+      { file: uuidC, total: 0, start: 0, items: [], busy: false, asking: false });
+    write([user('first message of C')], `${uuidC}.jsonl`);
+    const grown = await transcript('?after=0');
+    assert.equal(grown.body.file, uuidC); assert.deepEqual(grown.body.items.map((i) => i.text), ['first message of C']);
+    fs.rmSync(file(`${uuidC}.jsonl`));
     record(pidA, paneA, nameA, uuidA);
 
     // a record that belongs to another tmux server (the same pane id, a process that is not under this pane) is ignored
