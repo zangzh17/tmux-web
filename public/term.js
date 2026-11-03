@@ -1291,6 +1291,10 @@
     hideMenu();
     hideCmdMenu();
     uploadView('pick');
+    $uploadText.hidden = true;
+    $uploadTextBox.value = '';
+    $uploadPickText.hidden = readOnly; // nothing can be typed into somebody else's session from here
+    $uploadTextWhere.textContent = target === 'composer' ? 'Your clipboard, into the message box' : 'Your clipboard, straight into the terminal';
     $uploadDialog.showModal();
   }
   const uploadApi = (method, endpoint, body) => fetch(`api/uploads${endpoint}`, {
@@ -1426,7 +1430,13 @@
   }
   document.getElementById('upload-pick-clipboard').addEventListener('click', () => { void uploadClipboard(); });
   document.addEventListener('paste', (e) => { if ($uploadDialog.open && !$uploadPick.hidden) uploadPasted(e, uploadTarget); });
-  $pasteZone.addEventListener('paste', (e) => { if (!uploadPasted(e, uploadTarget)) { e.preventDefault(); uploadHint('That was text, not an image or a file.'); } });
+  $pasteZone.addEventListener('paste', (e) => {
+    if (uploadPasted(e, uploadTarget)) return;
+    e.preventDefault();
+    const text = e.clipboardData?.getData('text/plain') || '';
+    if (text && !readOnly) showTextBox('That was text: check it, then Send.', text);
+    else uploadHint(text ? 'That was text, not an image or a file.' : 'Nothing that can be uploaded was pasted.');
+  });
   $pasteZone.addEventListener('beforeinput', (e) => { if (e.inputType !== 'insertFromPaste') e.preventDefault(); }); // nothing is typed into it
   $pasteZone.addEventListener('input', () => { $pasteZone.textContent = ''; });
   $composerInput.addEventListener('paste', (e) => { uploadPasted(e, 'composer'); });
@@ -1457,24 +1467,86 @@
     $uploadCopy.textContent = ok ? 'Copied' : 'Select and copy';
     setTimeout(() => { $uploadCopy.textContent = 'Copy'; }, 1600);
   });
+  // text into the Read view's message box at the cursor (a space first when it would touch the word before)
+  function insertIntoComposer(text, spaced = true) {
+    const value = $composerInput.value;
+    const at = $composerInput.selectionStart ?? value.length;
+    const before = value.slice(0, at);
+    const insert = `${spaced && before && !/\s$/.test(before) ? ' ' : ''}${text}`;
+    $composerInput.value = before + insert + value.slice($composerInput.selectionEnd ?? at);
+    $composerInput.setSelectionRange(at + insert.length, at + insert.length);
+    autoGrow();
+    syncSend();
+    $composerInput.focus();
+  }
   $uploadPaste.addEventListener('click', () => {
     void copyUploaded();
     $uploadDialog.close();
-    if (uploadTarget === 'composer') {
-      const value = $composerInput.value;
-      const at = $composerInput.selectionStart ?? value.length;
-      const before = value.slice(0, at);
-      const insert = `${before && !/\s$/.test(before) ? ' ' : ''}${uploadText}`;
-      $composerInput.value = before + insert + value.slice($composerInput.selectionEnd ?? at);
-      $composerInput.setSelectionRange(at + insert.length, at + insert.length);
-      autoGrow();
-      syncSend();
-      $composerInput.focus();
-    } else {
+    if (uploadTarget === 'composer') insertIntoComposer(uploadText);
+    else {
       activeTerm()?.paste(uploadText); // bracketed when the program asked for it: Claude Code then attaches a pasted image path
       if (!coarse) w?.term?.focus();
     }
   });
+
+  // ---- Paste text: the clipboard into the terminal (or the message box) in one tap, for phones, where the terminal's own
+  // paste is hard to reach. navigator.clipboard.readText() has to start inside the tap: iOS Safari then shows a small "Paste"
+  // bubble that must be tapped (dismissing it rejects), Android Chrome asks once for clipboard permission, Firefox shows its
+  // own Paste item; a page that is not https has no clipboard API at all. Whenever the text does not come (refused, no API,
+  // nothing but an image on the clipboard), a box takes it instead: long-press, Paste, Send. The terminal gets it as a paste
+  // (bracketed when the program asked for it), so a shell or Claude does not run it before Enter.
+  const $uploadPickText = document.getElementById('upload-pick-text');
+  const $uploadTextWhere = document.getElementById('upload-text-where');
+  const $uploadText = document.getElementById('upload-text');
+  const $uploadTextBox = document.getElementById('upload-text-box');
+  const $uploadTextHint = document.getElementById('upload-text-hint');
+  const $uploadTextInfo = document.getElementById('upload-text-info');
+  const $uploadTextSend = document.getElementById('upload-text-send');
+  const lineCount = (text) => text.replace(/\n$/, '').split('\n').length;
+  const sizeOf = (text) => { const n = lineCount(text); return n > 1 ? `${n} lines` : `${text.length} character${text.length === 1 ? '' : 's'}`; };
+  function syncTextSend() {
+    const text = $uploadTextBox.value;
+    $uploadTextSend.disabled = !text;
+    $uploadTextInfo.textContent = text ? sizeOf(text) : '';
+  }
+  function showTextBox(hint, text = '') {
+    $uploadText.hidden = false;
+    $uploadTextHint.textContent = hint;
+    $uploadTextHint.hidden = !hint;
+    if (text) $uploadTextBox.value = text;
+    syncTextSend();
+    $uploadTextBox.focus({ preventScroll: true });
+    $uploadText.scrollIntoView({ block: 'nearest' });
+  }
+  function deliverText(text) {
+    const toComposer = uploadTarget === 'composer' && $textDialog.open;
+    $uploadDialog.close();
+    if (toComposer) { insertIntoComposer(text, false); return; }
+    const term = activeTerm();
+    if (!term) return;
+    term.paste(text);
+    if (!coarse) term.focus();
+    clipboardNotice(`Pasted ${sizeOf(text)}`);
+  }
+  async function pasteClipboardText() {
+    let text;
+    try {
+      if (!navigator.clipboard?.readText) throw new Error('no clipboard reading here');
+      text = await navigator.clipboard.readText(); // called before any other await: it needs the tap
+    } catch {
+      showTextBox(coarse ? 'The browser did not hand the clipboard over. Long-press the box, choose Paste, then Send.'
+        : `The browser did not hand the clipboard over. Paste into the box (${isMac ? '⌘V' : 'Ctrl+V'}), then Send.`);
+      return;
+    }
+    if (!text) { showTextBox('There is no text on the clipboard (an image goes through Clipboard image below). You can type or paste into the box.'); return; }
+    deliverText(text);
+  }
+  $uploadPickText.addEventListener('click', () => { void pasteClipboardText(); });
+  $uploadTextBox.addEventListener('input', syncTextSend);
+  $uploadTextBox.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing && $uploadTextBox.value) { e.preventDefault(); deliverText($uploadTextBox.value); }
+  });
+  $uploadTextSend.addEventListener('click', () => { if ($uploadTextBox.value) deliverText($uploadTextBox.value); });
 
   const updateUrl = () => {
     const url = new URL(location.href);
@@ -2241,7 +2313,9 @@
   // above it) only another modal can be on top, so there it is shown as one. Switching hides and shows the same element: a
   // terminal in it stays connected.
   function showSheet(sheet) {
-    const over = $textDialog.open || (sheet !== $scratch && isModal($scratch));
+    // on a phone the Copy sheet takes the whole screen (as a modal, above the header and the key bar): half a phone screen,
+    // less the keyboard, left three lines of text
+    const over = $textDialog.open || (sheet !== $scratch && isModal($scratch)) || (sheet.id === 'copy-panel' && DEVICE === 'phone');
     if (sheet.open && isModal(sheet) === over) return;
     sheet.dataset.switching = '1';
     if (sheet.open) sheet.close();
@@ -2405,14 +2479,14 @@
     $pasteText.value = '';
     $pasteText.focus();
   }
+  function setTall(sheet, button, on) {
+    sheet.classList.toggle('tall', on);
+    button.setAttribute('aria-pressed', String(on));
+    button.title = on ? 'Shorter' : 'Taller';
+    button.setAttribute('aria-label', button.title);
+  }
   function tallToggle(sheet, button) {
-    button.addEventListener('click', () => {
-      const on = !sheet.classList.contains('tall');
-      sheet.classList.toggle('tall', on);
-      button.setAttribute('aria-pressed', String(on));
-      button.title = on ? 'Shorter' : 'Taller';
-      button.setAttribute('aria-label', button.title);
-    });
+    button.addEventListener('click', () => setTall(sheet, button, !sheet.classList.contains('tall')));
   }
   $scratchOpen.addEventListener('click', () => { if (scratchUp()) minimiseScratch(); else void openScratch(); });
   $textScratch.addEventListener('click', () => { void openScratch(); });
@@ -2438,7 +2512,9 @@
   for (const id of ['scratch-paste', 'scratch-tall']) keepFocus(document.getElementById(id));
 
   // ---- Copy: an editable copy of the text in a sheet like the scratch terminal's (over the Read view or the scratch terminal
-  // when they are up). Edit it as you like; nothing typed there reaches a terminal, and the key bar is off while it is open. The
+  // when they are up). Edit it as you like; nothing typed there reaches a terminal, and the key bar is off while it is open. On a
+  // touch screen it opens read-only (a long-press selects without the keyboard taking half the screen; Edit makes it editable),
+  // and on a phone it fills the screen. The
   // text comes from the terminal (tmux's scrollback; a Claude session's is just its screen), from Claude's conversation (as plain
   // text, the newest 500 entries) or from the scratch terminal.
   const $copyPanel = document.getElementById('copy-panel');
@@ -2447,6 +2523,16 @@
   const $copySources = document.getElementById('copy-sources');
   const $copyOpen = document.getElementById('copy-open');
   const $copyWrap = document.getElementById('copy-wrap');
+  const $copyEdit = document.getElementById('copy-edit');
+  const $copyHint = document.getElementById('copy-hint');
+  const $copyTall = document.getElementById('copy-tall');
+  $copyEdit.hidden = !coarse;
+  function setCopyEditing(on) {
+    $copyText.readOnly = !on;
+    $copyEdit.setAttribute('aria-pressed', String(on));
+    $copyText.setAttribute('aria-label', on ? 'Editable copy of the text' : 'Copy of the text');
+    $copyHint.textContent = on ? 'Edit freely: nothing here reaches the terminal.' : 'Long-press to select, or Copy all.';
+  }
   const copyStatus = sheetStatus(document.getElementById('copy-status'));
   let copySource = null;
   let copyGen = 0;
@@ -2460,6 +2546,10 @@
   async function openCopy(source) {
     hideCmdMenu();
     closeArrowPop();
+    if (!$copyPanel.open) {
+      setCopyEditing(!coarse);
+      if (DEVICE === 'phone') setTall($copyPanel, $copyTall, true);
+    }
     showSheet($copyPanel);
     $copyOpen.setAttribute('aria-expanded', 'true');
     document.getElementById('app').classList.add('copying');
@@ -2507,7 +2597,12 @@
   document.getElementById('copy-close').addEventListener('click', closeCopy);
   document.getElementById('copy-reload').addEventListener('click', () => { void loadCopy(copySource); });
   $copyWrap.addEventListener('click', () => setWrap($copyText.wrap === 'off'));
-  tallToggle($copyPanel, document.getElementById('copy-tall'));
+  tallToggle($copyPanel, $copyTall);
+  $copyEdit.addEventListener('click', () => {
+    const on = $copyText.readOnly;
+    setCopyEditing(on);
+    if (on) $copyText.focus(); else $copyText.blur(); // the keyboard comes up for editing and goes away after
+  });
   $copySources.addEventListener('click', (e) => { const b = e.target.closest('.seg'); if (b && b.dataset.src !== copySource) void loadCopy(b.dataset.src); });
   async function copyOut(text) {
     if (!text) { copyStatus('Select some text first.', 'error'); return; }
@@ -2517,7 +2612,7 @@
   document.getElementById('copy-all').addEventListener('click', () => { void copyOut($copyText.value); });
   document.getElementById('copy-selection').addEventListener('click', () => { void copyOut($copyText.value.slice($copyText.selectionStart, $copyText.selectionEnd)); });
   // the buttons must not take the focus from the text (its selection, and the phone keyboard if it is up)
-  for (const id of ['copy-all', 'copy-selection', 'copy-wrap']) document.getElementById(id).addEventListener('pointerdown', (e) => e.preventDefault());
+  for (const id of ['copy-all', 'copy-selection', 'copy-wrap', 'copy-edit']) document.getElementById(id).addEventListener('pointerdown', (e) => e.preventDefault());
 
   // ---- files: a pop-up file manager (api/files) that opens in this session's directory (the scratch terminal's while that is
   // open). A tap opens a folder; ⋯, or a tap on a file, shows what can be done with an entry. For the folder shown: cd here

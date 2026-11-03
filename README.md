@@ -23,7 +23,8 @@ terminal and it stays there until the page is opened again; a plain shell opens 
   (its current `sessionId`, which follows `/clear` and `--resume`, and `tmux: "<session>:<window id>.<pane id>"`), and the pane's
   conversation is `~/.claude/projects/<cwd with non-alphanumerics as "-">/<sessionId>.jsonl`. (Taking "the newest file in the
   directory" instead made two Claude panes in one directory show each other's conversation.) A record only counts when its process
-  runs under this pane, and a pane whose conversation has no file yet shows none rather than someone else's; a Claude that keeps
+  runs under this pane, and a pane whose conversation has no file yet (Claude Code writes it with the first message: a new session, or right after
+  `/clear`) shows it empty, with the message box, rather than someone else's; a Claude that keeps
   no such record falls back to the newest file of the directory:
   your messages as bubbles with their time, Claude's replies rendered as Markdown (code highlighting, LaTeX math, tables),
   and consecutive tool calls/results folded into one `N steps · Bash ×2 · Read` capsule (red if a result failed; expand for
@@ -38,6 +39,8 @@ terminal and it stays there until the page is opened again; a plain shell opens 
   Claude's replies exactly as written, speaker lines `You · 14:02` / `Claude`, tool calls as one `[Bash] command` line each,
   failed tool results as `✗ first line`, the newest 500 entries) or the **Scratch** terminal; it opens on the conversation in a
   Claude session and in the Read view. Wrap (long lines), Reload (the text again, edits gone), taller/shorter.
+  On a phone or tablet it opens read-only, so a long-press selects without the keyboard coming up and taking half the screen;
+  **Edit** (pencil) makes it editable. On a phone it fills the whole screen (above the header and the key bar).
   In a pane that is not Claude it shows the tmux scrollback, as Read does.
 * **You can answer from here.** In a Claude conversation a message box sits under the text. On a computer Enter sends and
   Shift+Enter starts a new line; on a phone Enter is a new line and **Send** sends. On a phone, while you write (the box focused,
@@ -83,8 +86,15 @@ iPhone keep their own sizes): in the browser, and on the server (`GET/PUT /api/p
 `~/.local/state/tmux-web/prefs.json`, mode 600, only whitelisted keys), so they survive Safari clearing site data and reach
 another device of the same kind. A Claude session opens in Read only if Read (or Text) was the last view used; after **Done**
 the next one opens in the terminal.
+**Paste text** (first in the same dialog as Upload) puts the clipboard's text into the terminal, or into the message box when
+opened from there, as a paste (bracketed when the program asked for it, so nothing runs before Enter). It is for phones, where
+the terminal's own paste is hard to reach. It reads the clipboard in the tap (`navigator.clipboard.readText()`): iOS Safari then
+shows a small **Paste** bubble to tap, Android Chrome asks once for permission, Firefox shows its own Paste item. When the text
+does not come (the bubble dismissed, permission refused, no Clipboard API, only an image on the clipboard) a box opens instead:
+long-press it, Paste, **Send**. Text pasted into the dialog's paste zone lands in that box too.
+
 **Upload** (header, and the same button left of the Read view's message box) sends files, photos, a whole folder, or what is on
-the **clipboard** (an image such as a screenshot, or a file: the Clipboard button reads it, the browser may ask first; or paste
+the **clipboard** (an image such as a screenshot, or a file: the Clipboard image button reads it, the browser may ask first; or paste
 into the box under it, or anywhere while the dialog is open). An image or file pasted straight into the terminal, the scratch
 terminal or the message box is uploaded the same way, and Paste / Add to message puts its path there; a nameless or `image.png`
 one is named `clipboard-<date>-<time>.<ext>`. It all goes to

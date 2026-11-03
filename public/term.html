@@ -129,6 +129,21 @@
   .upload-choices.one { grid-template-columns: 1fr; }
   .upload-choices.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .upload-choices.three button { font-size: 14px; }
+  /* Paste text: the clipboard into the terminal (or the message box) in one tap; the box is for when the browser refuses */
+  #upload-pick-text { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 62px; margin: 0 0 14px; padding: 10px 14px; border: 1px solid var(--accent); border-radius: 12px; background: var(--key); background: color-mix(in srgb, var(--accent) 13%, var(--key)); color: var(--text); font: 600 16px/1.2 system-ui, -apple-system, sans-serif; text-align: left; cursor: pointer; touch-action: manipulation; }
+  #upload-pick-text:active { background: var(--key-on); }
+  #upload-pick-text svg { flex: none; width: 28px; height: 28px; color: var(--accent); }
+  #upload-pick-text b { display: block; }
+  #upload-pick-text small { display: block; margin-top: 3px; color: var(--muted); font: 400 13px/1.3 system-ui, -apple-system, sans-serif; }
+  #upload-text { margin: -4px 0 16px; }
+  #upload-text-hint { margin: 0 0 8px; color: var(--muted); font-size: 13.5px; line-height: 1.4; }
+  #upload-text-box { display: block; width: 100%; min-height: 84px; max-height: 32vh; padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--text); font: 13px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; resize: vertical; outline: none; }
+  .dev-phone #upload-text-box, .dev-tablet #upload-text-box { font-size: 16px; } /* iOS zooms into smaller text when it gets the focus */
+  #upload-text-box:focus { border-color: var(--accent); }
+  .upload-text-bar { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  #upload-text-info { flex: 1; min-width: 0; color: var(--muted); font-size: 12.5px; }
+  #upload-text-send { min-height: 40px; padding: 0 20px; border: 1px solid var(--accent); border-radius: 9px; background: var(--accent); color: #0b0e14; font: 600 14px/1 system-ui, sans-serif; cursor: pointer; touch-action: manipulation; }
+  #upload-text-send:disabled { opacity: 0.45; cursor: default; }
   #upload-pastezone { min-height: 46px; margin-top: 10px; padding: 13px 12px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); font: 13px/1.4 system-ui, -apple-system, sans-serif; text-align: center; outline: none; caret-color: transparent; overflow: hidden; -webkit-user-select: text; user-select: text; }
   #upload-pastezone:empty::before { content: attr(data-placeholder); }
   #upload-pastezone:focus { border-color: var(--accent); color: var(--text); }
@@ -631,7 +646,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-8.5 8.5M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>
         <span>Export</span>
       </button>
-      <button class="hbtn" id="upload" type="button" title="Upload files or a folder, then paste their paths" aria-label="Upload files" aria-haspopup="dialog" aria-controls="upload-dialog">
+      <button class="hbtn" id="upload" type="button" title="Paste text from the clipboard, or upload files or a folder and paste their paths" aria-label="Paste or upload" aria-haspopup="dialog" aria-controls="upload-dialog">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7 9l5-5 5 5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
         <span>Upload</span>
       </button>
@@ -682,6 +697,7 @@
     <dialog id="copy-panel" class="sheet" aria-label="Copy">
       <div class="s-head">
         <span class="s-title"><svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/></svg><b>Copy</b><span id="copy-what"></span></span>
+        <button class="sbtn" id="copy-edit" type="button" aria-pressed="false" title="Edit the text (brings up the keyboard)" aria-label="Edit the text" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg><span>Edit</span></button>
         <button class="sbtn" id="copy-wrap" type="button" aria-pressed="true" title="Wrap long lines" aria-label="Wrap long lines"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h13a3 3 0 0 1 0 6h-4m2-2-2 2 2 2M4 18h5"/></svg></button>
         <button class="sbtn" id="copy-reload" type="button" title="Reload the text (your edits go)" aria-label="Reload the text"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
         <button class="sbtn" id="copy-tall" type="button" aria-pressed="false" title="Taller" aria-label="Taller"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5-5 5 5M7 14l5 5 5-5"/></svg></button>
@@ -695,7 +711,7 @@
       <p class="s-status" id="copy-status" role="status" hidden></p>
       <textarea id="copy-text" wrap="soft" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Editable copy of the text"></textarea>
       <div class="s-bar copy-foot">
-        <span class="s-hint">Edit freely: nothing here reaches the terminal.</span>
+        <span class="s-hint" id="copy-hint">Edit freely: nothing here reaches the terminal.</span>
         <button class="sbtn" id="copy-selection" type="button">Copy selection</button>
         <button class="sbtn primary" id="copy-all" type="button">Copy all</button>
       </div>
@@ -822,13 +838,19 @@
   </div>
 </dialog>
 <dialog id="upload-dialog" aria-labelledby="upload-heading">
-  <h2 id="upload-heading">Upload</h2>
+  <h2 id="upload-heading">Paste or upload</h2>
   <div id="upload-pick">
-    <p>They go into a new folder on the server (kept for a week). Then paste their paths, or copy them. An image pasted into the terminal or the message box comes here by itself.</p>
+    <button id="upload-pick-text" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M8.5 10h7M8.5 13.5h7M8.5 17h4"/></svg><span><b>Paste text</b><small id="upload-text-where">Your clipboard, straight into the terminal</small></span></button>
+    <div id="upload-text" hidden>
+      <p id="upload-text-hint" hidden></p>
+      <textarea id="upload-text-box" rows="3" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" placeholder="Long-press here, choose Paste, then Send" aria-label="Text to paste"></textarea>
+      <div class="upload-text-bar"><span id="upload-text-info"></span><button id="upload-text-send" type="button" disabled>Send</button></div>
+    </div>
+    <p>Uploads go into a new folder on the server (kept for a week). Then paste their paths, or copy them. An image pasted into the terminal or the message box comes here by itself.</p>
     <div class="upload-choices">
       <button id="upload-pick-files" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>Files or photos</button>
       <button id="upload-pick-folder" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>A folder</button>
-      <button id="upload-pick-clipboard" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 11l2 2 4-4"/></svg>Clipboard</button>
+      <button id="upload-pick-clipboard" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 11l2 2 4-4"/></svg>Clipboard image</button>
     </div>
     <div id="upload-pastezone" contenteditable="true" role="textbox" aria-label="Paste an image or a file here to upload it" data-placeholder="…or paste here (⌘V / Ctrl+V, or long-press → Paste)" spellcheck="false" autocapitalize="off" enterkeyhint="done"></div>
     <input id="upload-files" type="file" multiple hidden>
@@ -850,6 +872,6 @@
     <button id="upload-paste" class="primary" type="button" hidden>Paste</button>
   </div>
 </dialog>
-<script src="term.js?v=20261101-viewer"></script>
+<script src="term.js?v=20261102-paste"></script>
 </body>
 </html>
