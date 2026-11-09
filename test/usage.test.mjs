@@ -78,9 +78,10 @@ test('usage: no login, an expired one, a refused one or a rate limit leave the l
   reply = { status: 200, body: { five_hour: { utilization: 50, resets_at: iso(now() + 60) } } };
   let { api } = await apiWith('none');
   try {
-    const { now: when, ...body } = (await api.request('GET', '/api/usage')).body;
+    const { now: when, spend, ...body } = (await api.request('GET', '/api/usage')).body;
     assert.ok(Math.abs(when - now()) <= 2);
     assert.deepEqual(body, { at: null, error: 'not signed in', fiveHour: null, sevenDay: null, history: [] });
+    assert.deepEqual([spend.ready, spend.week, spend.groups, spend.rate], [true, 0, [], null], 'no transcripts: nothing spent (spend.test.mjs has the rest)');
     assert.equal(asked.length, 0);
   } finally { await api.stop(); }
 

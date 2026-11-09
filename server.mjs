@@ -314,7 +314,7 @@ async function listSessions(user, specs, light) {
       sharedWithMe: shareOf(share).get(user.email) || null,
       preview: light ? [] : await peek(paneId),
       claude: CLAUDE_COMMAND.test(row.command), // what counts as Claude (TMUX_WEB_CLAUDE_COMMAND), so pages need not guess
-      context: light || !CLAUDE_COMMAND.test(row.command) ? null : await claudeContext(paneId, panePid, cwd),
+      ...(light || !CLAUDE_COMMAND.test(row.command) ? { context: null, spend: null } : await claudeFacts(paneId, panePid, cwd)),
     };
   }));
   return sessions.sort((a, b) => b.activity - a.activity);
@@ -1065,11 +1065,9 @@ function lastUsage(text) {
   }
   return null;
 }
-async function claudeContext(paneId, panePid, cwd) {
+async function claudeContext(file) {
   let fh;
   try {
-    const file = await paneTranscript(paneId, panePid, cwd);
-    if (!file) return null;
     fh = await fs.promises.open(file, 'r');
     const st = await fh.stat();
     const known = contextCache.get(file);
@@ -1092,6 +1090,14 @@ async function claudeContext(paneId, panePid, cwd) {
     while (contextCache.size > 64) contextCache.delete(contextCache.keys().next().value);
     return context;
   } catch { return null; } finally { await fh?.close(); }
+}
+// A Claude pane's card: how full its conversation is and what it has cost (see conversationSpend)
+async function claudeFacts(paneId, panePid, cwd) {
+  let file = null;
+  try { file = await paneTranscript(paneId, panePid, cwd); } catch { /* none */ }
+  if (!file) return { context: null, spend: null };
+  const [context, spent] = await Promise.all([claudeContext(file), conversationSpend(file).catch(() => null)]);
+  return { context, spend: spent };
 }
 
 // GET /api/sessions/:id/transcript -> { id, session, file, total, start, items, busy, asking }
@@ -1439,7 +1445,7 @@ function pollUsage() {
 // GET /api/usage -> { now, at, error, fiveHour: { used, resetsAt }, sevenDay, history: [[time, 5-hour %, weekly %], ...] }
 //   at: when the newest answer came (null: never, nothing to show); error: why the last try failed, null when it did not.
 //   used is a percentage; history covers 7 days, every answer of the last 6 hours and the last one of each half hour before.
-async function usageReport() {
+async function usageReport(user) {
   if (Date.now() - usage.tried > USAGE_FRESH) await pollUsage();
   const now = Math.floor(Date.now() / 1000);
   const samples = usageSamples();
@@ -1453,7 +1459,366 @@ async function usageReport() {
   const last = samples.at(-1);
   return { status: 200, body: { now, at: last?.[0] ?? null, error: usage.error,
     fiveHour: last?.[1] != null ? { used: last[1], resetsAt: last[3] } : null,
-    sevenDay: last?.[2] != null ? { used: last[2], resetsAt: last[4] } : null, history } };
+    sevenDay: last?.[2] != null ? { used: last[2], resetsAt: last[4] } : null, history, spend: await spendReport(user, last?.[4] ?? null) } };
+}
+
+// ---- Claude spend: what this account's Claude conversations cost at API list prices, read from their own transcripts
+// Every answer in a transcript carries its usage (input, cache writes by lifetime, cache reads, output, speed); priced per model
+// that is what the same work would cost on the API. Set against the weekly limit's own history (the answers kept above) it
+// also gives a rate: how much of the weekly limit a dollar of it used up, so a conversation's cost reads as a share of the
+// week. Transcripts touched in the last 8 days are indexed in the background, a subagent's (<conversation>/subagents/*.jsonl)
+// counting for its conversation: only new bytes are read, only lines with a usage or a title are parsed, the same answer
+// written as several lines (one per content block) counts once, and the index is kept in TMUX_WEB_SPEND (no text of the
+// conversations in it, only times, models, costs, titles and directories) so a restart does not read them all again.
+const SPEND_FILE = process.env.TMUX_WEB_SPEND || path.join(os.homedir(), '.local', 'state', 'tmux-web', 'spend.json');
+const SPEND_VERSION = 1; // bump when the prices or the shape of an event change: the index is built again
+const SPEND_DAYS = 8;
+const SPEND_RECENT = 2 * 3600; // "the last two hours"
+const SPEND_EVERY = 60_000;
+// $ per million tokens: [model, input, output, cache read]. A cache write costs 1.25x input for 5 minutes, 2x for an hour; fast
+// mode doubles everything; Claude Haiku 5.5 costs 5x above 100k prompt tokens. A model not listed is priced as Claude Opus 5.5.
+const PRICES = [
+  [/fable-5-2|mythos-5-2/, 8, 40, 0.2],
+  [/fable-5-1|mythos-5-1/, 10, 50, 0.25],
+  [/fable|mythos/, 10, 50, 1],
+  [/opus-5-5/, 4, 20, 0.2],
+  [/opus-(?:5|4-[5-9])/, 5, 25, 0.5],
+  [/opus/, 15, 75, 1.5],
+  [/sonnet-5-5/, 2, 10, 0.1],
+  [/sonnet-5/, 2, 10, 0.2],
+  [/sonnet/, 3, 15, 0.3],
+  [/haiku-5-5/, 0.1, 0.5, 0.01],
+  [/haiku-4/, 1, 5, 0.1],
+  [/haiku/, 0.8, 4, 0.08],
+];
+const tokens = (n) => (Number.isFinite(n) && n > 0 ? n : 0);
+const cents = (v) => Math.round(v * 1e7) / 1e7;
+// one answer -> [input, cache writes, cache reads, output] in dollars
+function costOf(model, u) {
+  const [pin, pout, pread] = PRICES.find(([re]) => re.test(model))?.slice(1) || [4, 20, 0.2];
+  const input = tokens(u.input_tokens);
+  const read = tokens(u.cache_read_input_tokens);
+  const written = tokens(u.cache_creation_input_tokens);
+  const hour = Math.min(written, tokens(u.cache_creation?.ephemeral_1h_input_tokens));
+  let k = (u.speed === 'fast' ? 2 : 1) / 1e6;
+  if (/haiku-5-5/.test(model) && input + read + written > 100_000) k *= 5;
+  return [input * pin * k, ((written - hour) * 1.25 + hour * 2) * pin * k, read * pread * k, tokens(u.output_tokens) * pout * k].map(cents);
+}
+// file -> { ino, offset, tail, size, mtimeMs, cwd, title, recent: [[answer id, event index]], ev: [[time, model, input $,
+// writes $, reads $, output $]], chain, pinned }: like the transcript cache, only bytes past `offset` are read and a changed
+// `tail` means the file was rewritten. `pinned`: when a session card last asked (kept past 8 days while it does).
+const spend = { files: new Map(), models: [], modelIds: new Map(), ready: false, loading: null, scan: null, version: 0, saveTimer: null };
+const modelId = (model) => {
+  let i = spend.modelIds.get(model);
+  if (i === undefined) { i = spend.models.push(model) - 1; spend.modelIds.set(model, i); }
+  return i;
+};
+const freshSpend = () => ({ ino: 0, offset: 0, tail: Buffer.alloc(0), size: -1, mtimeMs: 0, cwd: '', title: '', recent: [], ev: [], chain: Promise.resolve(), pinned: 0 });
+function withSpend(file, task) {
+  let entry = spend.files.get(file);
+  if (!entry) spend.files.set(file, entry = freshSpend());
+  const run = entry.chain.then(() => task(entry));
+  entry.chain = run.catch(() => {});
+  return run;
+}
+// the conversation a file counts for: its own path without .jsonl, or the one whose subagents/ it is in
+const conversationOf = (file) => { const i = file.lastIndexOf(`${path.sep}subagents${path.sep}`); return i >= 0 ? file.slice(0, i) : file.replace(/\.jsonl$/, ''); };
+function spendLine(entry, rec) {
+  if (!isObject(rec)) return;
+  if (rec.type === 'ai-title') { if (typeof rec.aiTitle === 'string' && rec.aiTitle.trim()) entry.title = rec.aiTitle.trim().slice(0, 120); return; }
+  const m = rec.message;
+  if (rec.type !== 'assistant' || !isObject(m?.usage) || typeof m.model !== 'string' || m.model === '<synthetic>') return;
+  const t = Math.round(Date.parse(rec.timestamp) / 1000);
+  if (!Number.isFinite(t)) return;
+  if (!entry.cwd && typeof rec.cwd === 'string') entry.cwd = rec.cwd.slice(0, 4096);
+  const id = String(m.id || rec.requestId || rec.uuid || '');
+  const ev = [t, modelId(m.model), ...costOf(m.model, m.usage)];
+  // the same answer again (its next content block): the later line has the final usage, the first line's time stands
+  const seen = id && entry.recent.find(([k]) => k === id);
+  if (seen) { entry.ev[seen[1]] = [entry.ev[seen[1]][0], ...ev.slice(1)]; return; }
+  if (id) { entry.recent.push([id, entry.ev.length]); if (entry.recent.length > 64) entry.recent.shift(); }
+  entry.ev.push(ev);
+}
+const SPEND_NEEDLES = [Buffer.from('"usage":{'), Buffer.from('"aiTitle":"')]; // never inside a JSON string, where quotes are escaped
+async function advanceSpend(file, entry) {
+  const fh = await fs.promises.open(file, 'r');
+  try {
+    const st = await fh.stat();
+    let intact = st.ino === entry.ino && st.size >= entry.offset;
+    if (intact && entry.offset) {
+      const probe = Buffer.alloc(entry.tail.length);
+      const { bytesRead } = await fh.read(probe, 0, probe.length, entry.offset - probe.length);
+      intact = bytesRead === probe.length && probe.equals(entry.tail);
+    }
+    if (!intact) Object.assign(entry, { ino: st.ino, offset: 0, tail: Buffer.alloc(0), cwd: '', title: '', recent: [], ev: [] });
+    entry.size = st.size;
+    entry.mtimeMs = st.mtimeMs;
+    if (st.size === entry.offset) return;
+    spend.version++;
+    const buf = Buffer.allocUnsafe(Math.min(8 << 20, st.size - entry.offset));
+    let pos = entry.offset;
+    let carry = Buffer.alloc(0);
+    while (pos < st.size) {
+      const { bytesRead } = await fh.read(buf, 0, Math.min(buf.length, st.size - pos), pos);
+      if (!bytesRead) break;
+      pos += bytesRead;
+      const data = carry.length ? Buffer.concat([carry, buf.subarray(0, bytesRead)]) : buf.subarray(0, bytesRead);
+      const end = data.lastIndexOf(10); // only whole lines: Claude may be writing the last one
+      const starts = new Set();
+      for (const needle of SPEND_NEEDLES) {
+        for (let i = data.indexOf(needle); i >= 0 && i < end; i = data.indexOf(needle, data.indexOf(10, i) + 1)) starts.add(data.lastIndexOf(10, i) + 1);
+      }
+      for (const a of [...starts].sort((x, y) => x - y)) {
+        try { spendLine(entry, JSON.parse(data.toString('utf8', a, data.indexOf(10, a)))); } catch { /* not JSON */ }
+      }
+      carry = Buffer.from(end >= 0 ? data.subarray(end + 1) : data);
+      entry.offset = pos - carry.length;
+    }
+    const tail = Buffer.alloc(Math.min(64, entry.offset));
+    await fh.read(tail, 0, tail.length, entry.offset - tail.length);
+    entry.tail = tail;
+  } finally { await fh.close(); }
+}
+// bring one file up to date unless its size and time say nothing changed
+const touchSpend = (file, pin) => withSpend(file, async (entry) => {
+  if (pin) entry.pinned = Date.now();
+  let st;
+  try { st = await fs.promises.stat(file); } catch { return; }
+  if (st.size !== entry.size || st.mtimeMs !== entry.mtimeMs) await advanceSpend(file, entry);
+});
+// every transcript (and subagent transcript) touched in the last SPEND_DAYS
+async function spendCandidates() {
+  const since = Date.now() - SPEND_DAYS * 86400_000;
+  const files = [];
+  let dirs;
+  try { dirs = await fs.promises.readdir(CLAUDE_PROJECTS, { withFileTypes: true }); } catch { return files; }
+  for (const d of dirs) {
+    if (!d.isDirectory()) continue;
+    const dir = path.join(CLAUDE_PROJECTS, d.name);
+    let names;
+    try { names = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { continue; }
+    for (const n of names) {
+      if (n.isFile() && n.name.endsWith('.jsonl')) files.push(path.join(dir, n.name));
+      else if (n.isDirectory() && SESSION_UUID.test(n.name)) {
+        const sub = path.join(dir, n.name, 'subagents');
+        try { for (const a of await fs.promises.readdir(sub)) if (a.endsWith('.jsonl')) files.push(path.join(sub, a)); } catch { /* none */ }
+      }
+    }
+  }
+  const stats = await Promise.all(files.map((file) => fs.promises.stat(file).then((st) => (st.mtimeMs >= since ? file : null), () => null)));
+  return stats.filter(Boolean);
+}
+function loadSpend() {
+  spend.loading ||= (async () => {
+    try {
+      const saved = JSON.parse(await fs.promises.readFile(SPEND_FILE, 'utf8'));
+      if (saved?.v !== SPEND_VERSION || !Array.isArray(saved.models) || !saved.models.every((m) => typeof m === 'string') || !isObject(saved.files)) return;
+      saved.models.forEach(modelId);
+      const n = spend.models.length;
+      for (const [file, s] of Object.entries(saved.files)) {
+        if (!isObject(s) || !Array.isArray(s.ev) || !Array.isArray(s.recent) || spend.files.has(file)) continue;
+        const ev = s.ev.filter((e) => Array.isArray(e) && e.length === 6 && e.every(Number.isFinite) && e[1] >= 0 && e[1] < n);
+        spend.files.set(file, { ...freshSpend(), ino: +s.ino || 0, offset: +s.offset || 0, size: +s.size || -1, mtimeMs: +s.mtimeMs || 0,
+          tail: Buffer.from(String(s.tail || ''), 'base64'), cwd: String(s.cwd || ''), title: String(s.title || ''),
+          recent: s.recent.filter((r) => Array.isArray(r) && typeof r[0] === 'string' && Number.isInteger(r[1]) && r[1] < ev.length), ev });
+      }
+    } catch { /* none yet, or unreadable: start over */ }
+  })();
+  return spend.loading;
+}
+function saveSpendSoon() {
+  if (spend.saveTimer) return;
+  spend.saveTimer = setTimeout(() => {
+    spend.saveTimer = null;
+    const files = {};
+    for (const [file, e] of spend.files) {
+      if (e.size >= 0) files[file] = { ino: e.ino, offset: e.offset, size: e.size, mtimeMs: e.mtimeMs, tail: e.tail.toString('base64'), cwd: e.cwd, title: e.title, recent: e.recent, ev: e.ev };
+    }
+    try {
+      fs.mkdirSync(path.dirname(SPEND_FILE), { recursive: true, mode: 0o700 });
+      const temp = `${SPEND_FILE}.${process.pid}.tmp`;
+      fs.writeFileSync(temp, JSON.stringify({ v: SPEND_VERSION, models: spend.models, files }), { mode: 0o600 });
+      fs.renameSync(temp, SPEND_FILE);
+    } catch (e) { logOnce(`[tmux-web] could not save the spend index: ${e.message}`); }
+  }, +process.env.TMUX_WEB_SPEND_SAVE_MS >= 0 && process.env.TMUX_WEB_SPEND_SAVE_MS ? +process.env.TMUX_WEB_SPEND_SAVE_MS : 20_000);
+  spend.saveTimer.unref();
+}
+function scanSpend() {
+  spend.scan ||= (async () => {
+    await loadSpend();
+    const before = spend.version;
+    const files = await spendCandidates();
+    for (const file of files) await touchSpend(file, false).catch(() => {}); // an unreadable file stops only itself
+    const listed = new Set(files);
+    for (const [file, e] of spend.files) if (!listed.has(file) && Date.now() - e.pinned > 3600_000) { spend.files.delete(file); spend.version++; }
+    spend.ready = true;
+    if (spend.version !== before) saveSpendSoon();
+  })().catch((e) => logOnce(`[tmux-web] spend index: ${e.message}`)).finally(() => { spend.scan = null; });
+  return spend.scan;
+}
+
+// How much of the weekly limit a dollar used up: between consecutive answers of the usage API in the same weekly window, the
+// rise of its percentage against what was spent here meanwhile, over the whole kept history (8 days). Usage of the same
+// login elsewhere (another computer, claude.ai) raises the percentage without a cost here, so it reads a little high then.
+let rateMemo = { key: '', value: null, at: 0 }; // it hardly moves: worked out again on a new usage answer, else once a minute
+const sortedEvents = () => {
+  const all = [];
+  for (const e of spend.files.values()) for (const ev of e.ev) all.push(ev);
+  return all.sort((a, b) => a[0] - b[0]);
+};
+function weeklyRate() {
+  if (!spend.ready) return null;
+  const samples = usageSamples();
+  const key = `${samples.length}:${samples.at(-1)?.[0]}`;
+  if (rateMemo.key === key && Date.now() - rateMemo.at < 60_000) return rateMemo.value;
+  const events = sortedEvents();
+  const sums = [0];
+  for (const ev of events) sums.push(sums.at(-1) + ev[2] + ev[3] + ev[4] + ev[5]);
+  const upTo = (t) => { let lo = 0; let hi = events.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (events[mid][0] <= t) lo = mid + 1; else hi = mid; } return sums[lo]; };
+  let pct = 0;
+  let cost = 0;
+  let from = null;
+  for (let i = 1; i < samples.length; i++) {
+    const [t0, , w0, , r0] = samples[i - 1];
+    const [t1, , w1, , r1] = samples[i];
+    if (w0 == null || w1 == null || r0 == null || r1 == null || Math.abs(r1 - r0) > 600 || w1 < w0 || t1 - t0 > 6 * 3600) continue;
+    pct += w1 - w0;
+    cost += upTo(t1) - upTo(t0);
+    from ??= t0;
+  }
+  const value = cost >= 1 && pct >= 2 ? { perDollar: pct / cost, pct: Math.round(pct * 10) / 10, cost: Math.round(cost * 100) / 100, from } : null;
+  rateMemo = { key, value, at: Date.now() };
+  return value;
+}
+const weekShare = (cost, rate) => (rate ? Math.round(cost * rate.perDollar * 1000) / 1000 : null);
+const sumOf = (ev) => ev[2] + ev[3] + ev[4] + ev[5];
+const r4 = (v) => Math.round(v * 1e4) / 1e4;
+
+// A session card's numbers for its conversation (the file and its subagents): { total, recent, pct: [total, recent] | null
+// (as shares of the weekly limit, see weeklyRate), since (first answer), step, spark: the last 24 hours in half hours, oldest
+// first, the last of them ending now }. Read now, not at the next scan, so the card keeps up with Claude.
+async function conversationSpend(file) {
+  const key = conversationOf(file);
+  const files = [file];
+  try { for (const a of await fs.promises.readdir(path.join(key, 'subagents'))) if (a.endsWith('.jsonl')) files.push(path.join(key, 'subagents', a)); } catch { /* none */ }
+  for (const f of files) await touchSpend(f, true).catch(() => {});
+  if (!spend.ready) scanSpend(); // the weekly rate needs every file
+  const now = Math.floor(Date.now() / 1000);
+  const step = 1800;
+  const spark = new Array(48).fill(0);
+  let total = 0;
+  let recent = 0;
+  let since = null;
+  for (const f of files) {
+    for (const ev of spend.files.get(f)?.ev || []) {
+      const c = sumOf(ev);
+      total += c;
+      if (ev[0] > now - SPEND_RECENT) recent += c;
+      since = since == null ? ev[0] : Math.min(since, ev[0]);
+      const i = 47 - Math.floor((now - ev[0]) / step);
+      if (i >= 0 && i < 48) spark[i] += c;
+    }
+  }
+  const rate = weeklyRate();
+  return { total: r4(total), recent: r4(recent), pct: rate ? [weekShare(total, rate), weekShare(recent, rate)] : null, since, step, spark: spark.map(r4) };
+}
+
+// The panel's analysis (part of GET /api/usage): { ready, rate, weekStart, week, recent, pct: [week, recent], hours: {start,
+// step, n}, halves: {start, step, n}, groups: [{ label, sub, live, cost, recent, hours: [...], halves: [...] }], kinds: {input,
+// write, read, output} by range (day, week), models: { day: [{ model, cost }], week } }. week: spent since the weekly window opened (the last 7 days without
+// one); hours: hourly over the last 7 days and a bit (to be bucketed by the page's own clock), halves: the last 24 hours.
+// groups: conversations by what they cost in the last 7 days, the biggest 24, the rest summed into one with `rest: n`;
+// kinds and models: what the money went on, over the last day and the last 7 days.
+// A conversation now open in a tmux session of this account is called by that session's name, when this person may see it;
+// one they could not see (someone else's), or a finished one when they may not see the local sessions, goes into the rest.
+async function spendReport(user, weekReset) {
+  if (!spend.ready) {
+    scanSpend();
+    await Promise.race([spend.scan, new Promise((resolve) => setTimeout(resolve, 1500))]);
+    if (!spend.ready) return { ready: false };
+  } else if (!spend.scan) await scanSpend();
+  const now = Math.floor(Date.now() / 1000);
+  const live = new Map();
+  try {
+    for (const row of await listRows()) {
+      if (!CLAUDE_COMMAND.test(row.command)) continue;
+      const file = await paneTranscript(row.paneId, row.panePid, row.cwd).catch(() => null);
+      if (file) live.set(conversationOf(file), { name: row.name, visible: !!accessFor(user, row.owner, row.share) });
+    }
+  } catch { /* no tmux */ }
+  const seesAll = !multiUser() || user.admin || personal() || !!accessFor(user, '');
+  const weekStart = weekReset != null && weekReset > now ? weekReset - 7 * 86400 : now - 7 * 86400;
+  const hourEnd = Math.ceil((now + 1) / 3600) * 3600;
+  const hours = { start: hourEnd - 172 * 3600, step: 3600, n: 172 };
+  const halves = { start: now - 48 * 1800, step: 1800, n: 48 };
+  const from = Math.min(hours.start, weekStart);
+  const groups = new Map();
+  const kinds = { day: [0, 0, 0, 0], week: [0, 0, 0, 0] };
+  const models = { day: new Map(), week: new Map() };
+  let week = 0;
+  let recent = 0;
+  for (const [file, e] of spend.files) {
+    const key = conversationOf(file);
+    let g = groups.get(key);
+    if (g && file === `${key}.jsonl`) Object.assign(g, { title: e.title || g.title, cwd: e.cwd || g.cwd });
+    for (const ev of e.ev) {
+      if (ev[0] < from) continue;
+      const c = sumOf(ev);
+      if (!g) groups.set(key, g = { key, title: e.title && file === `${key}.jsonl` ? e.title : '', cwd: e.cwd, cost: 0, recent: 0, hours: new Array(hours.n).fill(0), halves: new Array(halves.n).fill(0) });
+      if (ev[0] >= weekStart) week += c;
+      if (ev[0] > now - SPEND_RECENT) { recent += c; g.recent += c; }
+      const h = Math.floor((ev[0] - hours.start) / 3600);
+      if (h >= 0 && h < hours.n) g.hours[h] += c;
+      const half = Math.floor((ev[0] - halves.start) / 1800);
+      if (half >= 0 && half < halves.n) g.halves[half] += c;
+      if (ev[0] > now - 7 * 86400) g.cost += c;
+      for (const [range, span] of [['day', 86400], ['week', 7 * 86400]]) {
+        if (ev[0] <= now - span) continue;
+        for (let k = 0; k < 4; k++) kinds[range][k] += ev[2 + k];
+        const model = spend.models[ev[1]];
+        models[range].set(model, (models[range].get(model) || 0) + c);
+      }
+    }
+  }
+  // untitled conversations that are not open anywhere (mostly `claude -p` runs) count together per directory
+  const merged = new Map();
+  for (const g of groups.values()) {
+    if (g.cost <= 0 && g.recent <= 0 && !g.hours.some(Boolean)) continue;
+    const main = spend.files.get(`${g.key}.jsonl`); // a subagent's file may come first, or the conversation itself be older
+    const open = live.get(g.key);
+    const title = main?.title || g.title;
+    const cwd = main?.cwd || g.cwd;
+    const key = open || title ? g.key : `dir:${cwd}`;
+    const m = merged.get(key);
+    if (!m) { merged.set(key, { ...g, title, cwd, open, runs: 1 }); continue; }
+    m.runs++;
+    m.cost += g.cost;
+    m.recent += g.recent;
+    g.hours.forEach((v, i) => { m.hours[i] += v; });
+    g.halves.forEach((v, i) => { m.halves[i] += v; });
+  }
+  const home = os.homedir();
+  const named = [];
+  const rest = { label: '', sub: '', live: false, rest: 0, cost: 0, recent: 0, hours: new Array(hours.n).fill(0), halves: new Array(halves.n).fill(0) };
+  for (const g of [...merged.values()].sort((a, b) => b.cost - a.cost || b.recent - a.recent)) {
+    const where = g.cwd === home ? '~' : g.cwd.startsWith(`${home}/`) ? `~${g.cwd.slice(home.length)}` : g.cwd;
+    if (!(g.open ? g.open.visible : seesAll) || named.length >= 24) {
+      rest.rest += g.runs;
+      rest.cost += g.cost;
+      rest.recent += g.recent;
+      g.hours.forEach((v, i) => { rest.hours[i] += v; });
+      g.halves.forEach((v, i) => { rest.halves[i] += v; });
+      continue;
+    }
+    const label = g.open ? g.open.name : g.title || path.basename(g.cwd) || 'Claude';
+    const sub = g.open ? g.title || where : g.title ? where : `${where}${g.runs > 1 ? ` · ${g.runs} conversations` : ''}`;
+    named.push({ label, sub, live: !!g.open, cost: r4(g.cost), recent: r4(g.recent), hours: g.hours.map(r4), halves: g.halves.map(r4) });
+  }
+  if (rest.rest) named.push({ ...rest, cost: r4(rest.cost), recent: r4(rest.recent), hours: rest.hours.map(r4), halves: rest.halves.map(r4) });
+  const rate = weeklyRate();
+  return { ready: true, rate, weekStart, week: r4(week), recent: r4(recent), pct: rate ? [weekShare(week, rate), weekShare(recent, rate)] : null, hours, halves,
+    groups: named, kinds: Object.fromEntries(Object.entries(kinds).map(([range, k]) => [range, { input: r4(k[0]), write: r4(k[1]), read: r4(k[2]), output: r4(k[3]) }])),
+    models: Object.fromEntries(Object.entries(models).map(([range, m]) => [range, [...m].sort((a, b) => b[1] - a[1]).map(([model, cost]) => ({ model, cost: r4(cost) }))])) };
 }
 
 // ---- HTTP
@@ -1494,7 +1859,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, { status: 200, body: { now: Math.floor(Date.now() / 1000), account: ACCOUNT, owners: specs, sessions } });
     }
     if (pathname === '/api/sessions' && req.method === 'POST') return sendJson(res, await createSession(req, user));
-    if (pathname === '/api/usage' && req.method === 'GET') return sendJson(res, await usageReport());
+    if (pathname === '/api/usage' && req.method === 'GET') return sendJson(res, await usageReport(user));
     if (pathname === '/api/scratch' && req.method === 'POST') return sendJson(res, await createScratch(req, user));
     if (pathname === '/api/scratch' && req.method === 'GET') return sendJson(res, await listScratch(user));
     if (pathname === '/api/files' && req.method === 'GET') return sendJson(res, await listFiles(user, searchParams));
@@ -1541,6 +1906,8 @@ const server = http.createServer(async (req, res) => {
 sweepUploads();
 setInterval(sweepUploads, 3600_000).unref();
 setTimeout(pollUsage, 3000).unref();
+setTimeout(scanSpend, 2000).unref();
+setInterval(scanSpend, SPEND_EVERY).unref();
 setInterval(pollUsage, USAGE_EVERY).unref();
 setInterval(sweepScratch, Math.min(60_000, SCRATCH_IDLE * 500)).unref();
 fs.mkdirSync(path.dirname(SOCK), { recursive: true, mode: 0o700 });

@@ -78,6 +78,18 @@ The two rings in the header are what is left of the account's Claude **5-hour** 
 window from its start to its reset: the usage so far, an even pace (the faint diagonal) and where the pace so far leads, with
 when it runs out if that comes before the reset. The panel starts open on a wide screen and closed on a phone; tapping the
 rings opens or closes it, and that choice is remembered per device kind.
+**Spend.** What Claude's work would cost at API list prices, from the token counts of every answer in the transcripts on this
+machine (subagents included). Each Claude session's card shows its conversation's **total** and the **last 2 hours**, each with
+the share of the weekly limit it comes to (`≈3.7% wk`), and a sparkline of its last 24 hours in half hours (the last two hours
+in full color). The header pill shows the last two hours next to the rings, and the panel gets a **Spend** card: the week so far
+(since the weekly window opened) and the last 2 hours, each as a share of the week, what **1 % of the week** costs, a stacked
+bar chart of the last **24 h** (half hours) or **7 d** (4-hour steps of the browser's clock) by conversation (the range's five
+biggest in their colors, a color staying with its conversation; the rest grey; hover, tap or the arrow keys for a bar's
+numbers), the same as a list (a conversation open in a tmux session goes by the session's name and says `open`; untitled
+`claude -p` runs count together per directory), and what the money went on (cache reads, cache writes, output, input; models).
+The share of the week is measured, not guessed: between consecutive answers of the usage API in the same weekly window, the
+rise of the weekly percentage against what was spent here meanwhile, over the 8 days kept. Use of the same Claude login
+elsewhere (claude.ai, another computer) raises the percentage without a cost here, so the shares then read a little high.
 The Read view's **Aa** button opens a row with **Size** (A−/A+ or the slider, 80–500 %, scales everything in the text including code and
 tool steps) and **Width** (Normal 760 px, Wide 1100 px, Full).
 Display preferences (terminal font, Read size and width, and the view a Claude session opens in) are remembered per person
@@ -161,6 +173,24 @@ browser ─► Cloudflare Access (login) ─► cloudflared tunnel ─► Caddy 
   `~/.local/state/tmux-web/usage.json`, mode 600, no token in it). It never refreshes the login (that would rotate the refresh
   token under Claude Code): while the token is expired, `error` says so and the last answer stands. A 429 pauses it as long as
   `Retry-After` asks (15 minutes without one).
+* Spend (see the page section above). Every assistant record's `message.usage` is priced by its model: $ per million tokens
+  input/output/cache read, Opus 5.5 4/20/0.20, Sonnet 5.5 2/10/0.10, Fable 5.2 8/40/0.20, Haiku 5.5 0.10/0.50/0.01 (5x past
+  100k prompt tokens), older models at their own list prices, anything unknown as Opus 5.5; cache writes are 1.25x input for
+  5 minutes and 2x for an hour (`cache_creation.ephemeral_1h_input_tokens`), fast mode doubles it all. An answer is written as
+  one line per content block with the same `message.id`: it counts once, with the last line's usage. Transcripts touched in
+  the last 8 days (`~/.claude/projects/*/*.jsonl` and `*/<conversation>/subagents/*.jsonl`) are indexed in the background
+  every minute: only new bytes are read, only lines containing `"usage":{` or `"aiTitle":"` are parsed (the first index of
+  7 GB takes about 13 s), and the index (times, models, costs, titles, directories; no text) is kept in `TMUX_WEB_SPEND`
+  (default `~/.local/state/tmux-web/spend.json`, mode 600) so a restart reads only what is new. A session card's own
+  conversation is brought up to date when the list asks, so it keeps up with Claude.
+  `GET /api/sessions` gives each Claude session `spend: {total, recent, pct: [total, recent] | null, since, step, spark}` (`pct`:
+  shares of the weekly limit; `spark`: 48 half hours, the last ending now). `GET /api/usage` adds `spend: {ready, rate:
+  {perDollar, pct, cost, from} | null, weekStart, week, recent, pct, hours: {start, step, n}, halves, groups: [{label, sub,
+  live, cost, recent, hours: [...], halves: [...]}], kinds: {day, week}, models: {day, week}}`: `hours` are hourly over the
+  last 7 days and a bit (the page buckets them by its own clock), `halves` the last 24 hours; `groups` the 24 conversations
+  that cost most in the last 7 days and one `{rest: n}` for the others. Who may see what: a conversation open in a session this
+  person may not see, or (for someone who may not see the local sessions) any conversation not open in one of theirs, only
+  counts in the rest; the totals are the account's, like the limits. `{ready: false}` until the first index is done.
 * **Scratch** (header) opens a throwaway shell over the lower part of the page (a floating window on a wide screen) in the
   session's directory: `POST /api/scratch {from}` or `{cwd}` makes a tmux session marked `@tmux_web_scratch` (no status line, in
   no list, at most 8). While it is open the key bar, the commands menu and Files type into it; it has its own **Paste** (a text
@@ -424,8 +454,11 @@ config reloads, and multi-user being off without a users file. `accounts.test.mj
 side: who may enter which, admins, sharing, `/api/accounts` and the switches, and refusing everything without a valid users file.
 `scratch.test.mjs` and `files.test.mjs` cover scratch terminals (directory, hidden from lists, close, sweep, the cap) and the
 file API (listing, links, mkdir, rename without replacing, delete, refused names). `usage.test.mjs` runs `/api/usage` against a stand-in for Anthropic: the request it makes, the history it keeps, and no login, an
-expired or refused one, a rate limit and an odd answer. `helpers.mjs` is the shared scaffolding; it points every test at its own
-Claude login file and an unreachable usage URL, so no test reads the real login or asks Anthropic.
+expired or refused one, a rate limit and an odd answer. `spend.test.mjs` prices hand-written transcripts (every token kind, fast
+mode, long Haiku prompts, a synthetic answer, one answer written as several lines and continued later, a subagent), checks a
+session card's numbers, the weekly rate from a usage history, which conversations each person sees named, and a restart from
+the saved index. `helpers.mjs` is the shared scaffolding; it points every test at its own Claude login file, transcripts
+directory, spend index and an unreachable usage URL, so no test reads the real login or transcripts, or asks Anthropic.
 
 ## Vendored libraries
 
