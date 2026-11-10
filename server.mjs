@@ -179,6 +179,7 @@ function parseUsers(raw) {
       manageOthers: scopeOf(entry.manageOthers),
       account: entry.account === home ? '' : entry.account || '',
       admin: entry.admin === true,
+      usage: typeof entry.usage === 'boolean' ? entry.usage : null,
     });
   }
   // without a home account every backend would take a person without "account" for one of its own
@@ -202,12 +203,15 @@ const personal = () => ACCOUNT !== homeAccount(); // somebody's own Unix account
 const userFor = (email) => {
   const entry = config().users.get(email);
   return { email, name: displayName(email), viewOthers: entry?.viewOthers ?? null, manageOthers: entry?.manageOthers ?? null,
-    account: entry?.account || homeAccount(), admin: !!entry?.admin };
+    account: entry?.account || homeAccount(), admin: !!entry?.admin, usage: entry?.usage ?? null };
 };
 const multiUser = () => !MULTI_USER_FORCED_OFF && config() !== NO_USERS;
 // may this person use this backend at all (their own account, or an admin)
 const mayEnter = (user) => !multiUser() || user.admin || user.account === ACCOUNT;
 const mayViewOthers = (user) => user.admin || !!(user.viewOthers || user.manageOthers);
+// may this person see Claude's usage (the limits, what was spent): admins always; anyone else as `usage` in users.json says,
+// and without it the people of the home account do and the people of another Unix account (somebody's own) do not
+const maySeeUsage = (user) => !multiUser() || user.admin || (user.usage ?? user.account === homeAccount());
 const covers = (scope, owner) => scope === 'all' || !!scope?.has(owner);
 // @tmux_web_share: "a@x.com=view,b@x.com=full" -> Map(email -> 'view' | 'full'); anything malformed is ignored
 const EMAIL = /^[a-z0-9._%+-]+@[a-z0-9.-]+$(?![\s\S])/;
@@ -314,7 +318,7 @@ async function listSessions(user, specs, light) {
       sharedWithMe: shareOf(share).get(user.email) || null,
       preview: light ? [] : await peek(paneId),
       claude: CLAUDE_COMMAND.test(row.command), // what counts as Claude (TMUX_WEB_CLAUDE_COMMAND), so pages need not guess
-      ...(light || !CLAUDE_COMMAND.test(row.command) ? { context: null, spend: null } : await claudeFacts(paneId, panePid, cwd)),
+      ...(light || !CLAUDE_COMMAND.test(row.command) ? { context: null, spend: null } : await claudeFacts(paneId, panePid, cwd, maySeeUsage(user))),
     };
   }));
   return sessions.sort((a, b) => b.activity - a.activity);
@@ -325,7 +329,7 @@ async function listSessions(user, specs, light) {
 // look at or manage (the filter UI is only offered when there are people; none of it when multiUser is false), and whom I could
 // share a session with.
 async function whoAmI(user) {
-  const base = { email: user.email, name: user.name, account: ACCOUNT, myAccount: user.account, admin: user.admin, allowed: mayEnter(user) };
+  const base = { email: user.email, name: user.name, account: ACCOUNT, myAccount: user.account, admin: user.admin, allowed: mayEnter(user), usage: maySeeUsage(user) };
   const none = { canViewOthers: false, canManageOthers: false, people: [], local: 0, sharePeople: [] };
   if (!multiUser()) return { multiUser: false, ...base, ...none };
   if (!mayEnter(user)) return { multiUser: true, ...base, ...none };
@@ -1092,11 +1096,11 @@ async function claudeContext(file) {
   } catch { return null; } finally { await fh?.close(); }
 }
 // A Claude pane's card: how full its conversation is and what it has cost (see conversationSpend)
-async function claudeFacts(paneId, panePid, cwd) {
+async function claudeFacts(paneId, panePid, cwd, withSpend) {
   let file = null;
   try { file = await paneTranscript(paneId, panePid, cwd); } catch { /* none */ }
   if (!file) return { context: null, spend: null };
-  const [context, spent] = await Promise.all([claudeContext(file), conversationSpend(file).catch(() => null)]);
+  const [context, spent] = await Promise.all([claudeContext(file), withSpend ? conversationSpend(file).catch(() => null) : null]);
   return { context, spend: spent };
 }
 
@@ -1469,7 +1473,8 @@ async function usageReport(user) {
 // week. Transcripts touched in the last 8 days are indexed in the background, a subagent's (<conversation>/subagents/*.jsonl)
 // counting for its conversation: only new bytes are read, only lines with a usage or a title are parsed, the same answer
 // written as several lines (one per content block) counts once, and the index is kept in TMUX_WEB_SPEND (no text of the
-// conversations in it, only times, models, costs, titles and directories) so a restart does not read them all again.
+// conversations in it, only times, models, costs, titles and directories) so a restart does not read them all again. Nothing
+// is read until someone who may see the usage (maySeeUsage) asks for it.
 const SPEND_FILE = process.env.TMUX_WEB_SPEND || path.join(os.homedir(), '.local', 'state', 'tmux-web', 'spend.json');
 const SPEND_VERSION = 1; // bump when the prices or the shape of an event change: the index is built again
 const SPEND_DAYS = 8;
@@ -1507,7 +1512,7 @@ function costOf(model, u) {
 // file -> { ino, offset, tail, size, mtimeMs, cwd, title, recent: [[answer id, event index]], ev: [[time, model, input $,
 // writes $, reads $, output $]], chain, pinned }: like the transcript cache, only bytes past `offset` are read and a changed
 // `tail` means the file was rewritten. `pinned`: when a session card last asked (kept past 8 days while it does).
-const spend = { files: new Map(), models: [], modelIds: new Map(), ready: false, loading: null, scan: null, version: 0, saveTimer: null };
+const spend = { files: new Map(), models: [], modelIds: new Map(), ready: false, loading: null, scan: null, version: 0, saveTimer: null, wanted: false };
 const modelId = (model) => {
   let i = spend.modelIds.get(model);
   if (i === undefined) { i = spend.models.push(model) - 1; spend.modelIds.set(model, i); }
@@ -1644,6 +1649,7 @@ function saveSpendSoon() {
   spend.saveTimer.unref();
 }
 function scanSpend() {
+  spend.wanted = true; // from now on the index is kept up to date every minute
   spend.scan ||= (async () => {
     await loadSpend();
     const before = spend.version;
@@ -1701,8 +1707,9 @@ async function conversationSpend(file) {
   const key = conversationOf(file);
   const files = [file];
   try { for (const a of await fs.promises.readdir(path.join(key, 'subagents'))) if (a.endsWith('.jsonl')) files.push(path.join(key, 'subagents', a)); } catch { /* none */ }
+  await loadSpend(); // what was saved first, so only the new bytes are read
   for (const f of files) await touchSpend(f, true).catch(() => {});
-  if (!spend.ready) scanSpend(); // the weekly rate needs every file
+  if (!spend.ready && !spend.scan) scanSpend(); // the weekly rate needs every file
   const now = Math.floor(Date.now() / 1000);
   const step = 1800;
   const spark = new Array(48).fill(0);
@@ -1859,7 +1866,10 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, { status: 200, body: { now: Math.floor(Date.now() / 1000), account: ACCOUNT, owners: specs, sessions } });
     }
     if (pathname === '/api/sessions' && req.method === 'POST') return sendJson(res, await createSession(req, user));
-    if (pathname === '/api/usage' && req.method === 'GET') return sendJson(res, await usageReport(user));
+    if (pathname === '/api/usage' && req.method === 'GET') {
+      if (!maySeeUsage(user)) return sendJson(res, { status: 403, body: { error: 'Claude usage is not shown to this person' } });
+      return sendJson(res, await usageReport(user));
+    }
     if (pathname === '/api/scratch' && req.method === 'POST') return sendJson(res, await createScratch(req, user));
     if (pathname === '/api/scratch' && req.method === 'GET') return sendJson(res, await listScratch(user));
     if (pathname === '/api/files' && req.method === 'GET') return sendJson(res, await listFiles(user, searchParams));
@@ -1906,8 +1916,7 @@ const server = http.createServer(async (req, res) => {
 sweepUploads();
 setInterval(sweepUploads, 3600_000).unref();
 setTimeout(pollUsage, 3000).unref();
-setTimeout(scanSpend, 2000).unref();
-setInterval(scanSpend, SPEND_EVERY).unref();
+setInterval(() => { if (spend.wanted) scanSpend(); }, SPEND_EVERY).unref(); // started by the first request that wants it
 setInterval(pollUsage, USAGE_EVERY).unref();
 setInterval(sweepScratch, Math.min(60_000, SCRATCH_IDLE * 500)).unref();
 fs.mkdirSync(path.dirname(SOCK), { recursive: true, mode: 0o700 });

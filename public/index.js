@@ -651,10 +651,12 @@
 
   let spendRetry = null;
   async function loadUsage() {
+    if (me?.usage === false) { usage = null; renderUsage(); return; } // not shown to this person (users.json `usage`)
     try {
       const res = await fetch('api/usage', { cache: 'no-store', credentials: 'same-origin' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      usage = await res.json();
+      if (res.status === 403) usage = null; // same, asked before api/me answered
+      else if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      else usage = await res.json();
     } catch { /* keep the last answer */ }
     renderUsage();
     // the first reading of the transcripts takes a few seconds: ask again soon rather than in a minute

@@ -297,6 +297,11 @@ and a broken edit keeps the last good version) holds only what differs from a pl
 
 `viewOthers` and `manageOthers` each take `"all"` or a list of emails. Managing implies viewing, so a superuser needs only
 `"manageOthers": "all"`. "Viewers" in the `unowned` setting means anyone with either permission.
+`"usage": true | false` says whether a person sees Claude's usage (the rings, the Spend card, the spend line on session cards;
+`GET /api/usage` answers 403 otherwise, `/api/sessions` gives `spend: null` and `/api/me` says `usage: false`). Admins always
+do, in every account; without the setting the people of the home account do and the people of another Unix account do not.
+A backend whose people may not see it never reads its account's transcripts for spend (nothing is indexed until somebody who
+may asks, e.g. an admin on `/a/<account>/`).
 
 A signed-in email that is not listed is a plain user: it sees its own sessions (and Local ones per `unowned`) and nobody else's.
 To add a person: add the email to the Access policy **and** `ALLOWED_EMAILS` (restart the API), then, if they should see

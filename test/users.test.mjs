@@ -146,7 +146,7 @@ test('/api/me: who I am and whose sessions I may look at', async () => {
   const admin = await as('admin@x.com', 'GET', '/api/me');
   assert.equal(admin.status, 200);
   // one account (no "home"): it is everybody's, and everybody listed in users.json could be given a session
-  const here = { account: 'main', myAccount: 'main', admin: false, allowed: true };
+  const here = { account: 'main', myAccount: 'main', admin: false, allowed: true, usage: true };
   const sharePeople = [{ email: 'admin@x.com', name: 'Admin' }, { email: 'alice@x.com', name: 'Alice' }, { email: 'bob@x.com', name: 'Bob' }];
   const others = (email) => sharePeople.filter((p) => p.email !== email);
   assert.deepEqual(admin.body, {
@@ -279,7 +279,7 @@ test('users.json changes apply without a restart; a broken file keeps the last g
     api.writeUsers({ ...CONFIG, users: { 'alice@x.com': { name: 'Alice', viewOthers: 'all' } } }); // a good one replaces it
     assert.deepEqual([(await as('admin@x.com', 'GET', '/api/me')).body.canViewOthers, names(await list('alice@x.com', '?owner=carol@x.com')).length > 0], [false, true]);
     fs.rmSync(api.usersFile); // no file: multi-user is off (see the next test): nobody is separated from anybody
-    assert.deepEqual((await as('alice@x.com', 'GET', '/api/me')).body, { multiUser: false, email: 'alice@x.com', name: 'alice', account: 'main', myAccount: 'main', admin: false, allowed: true,
+    assert.deepEqual((await as('alice@x.com', 'GET', '/api/me')).body, { multiUser: false, email: 'alice@x.com', name: 'alice', account: 'main', myAccount: 'main', admin: false, allowed: true, usage: true,
       canViewOthers: false, canManageOthers: false, people: [], local: 0, sharePeople: [] });
     assert.deepEqual(names(await list('bob@x.com')), ['a1', 'adm1', 'b1', 'b2', 'c1', 'fk', 'loc1', 'loc2', 'stamp1', 'stamp2'], 'everything is shown to everybody');
   } finally { api.writeUsers(CONFIG); }

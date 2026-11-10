@@ -89,6 +89,35 @@ test('spend: prices, one answer written as several lines, subagents, and the ses
   } finally { await api.stop(); }
 });
 
+test('spend: who sees the usage (users.json `usage`; admins always; another Unix account\'s people not by default)', async () => {
+  const people = { 'boss@x.com': { admin: true, usage: false }, 'wfh@x.com': {}, 'off@x.com': { usage: false }, 'kid@x.com': { account: 'sub' } };
+  const ALLOWED_EMAILS = Object.keys(people).join(' ');
+  const shown = async (api, email) => {
+    const me = (await api.requestAs(email, 'GET', '/api/me')).body;
+    const usage = await api.requestAs(email, 'GET', '/api/usage');
+    const card = (await api.requestAs(email, 'GET', '/api/sessions?owner=all')).body.sessions?.find((x) => x.claude);
+    return [me.usage, usage.status, card ? card.spend !== null : null];
+  };
+  const main = await startApi({ TMUX_WEB_CLAUDE_COMMAND: '^sleep$', TMUX_WEB_CLAUDE_PROJECTS: projects, ALLOWED_EMAILS });
+  try {
+    main.writeUsers({ home: 'main', accounts: ['sub'], users: people });
+    for (const email of ['wfh@x.com', 'off@x.com']) main.tmux('set-option', '-t', main.start(`of-${email.split('@')[0]}`, '-c', work, 'sleep 600'), '@tmux_web_owner', email);
+    assert.deepEqual(await shown(main, 'boss@x.com'), [true, 200, true], 'an admin, even with usage: false');
+    assert.deepEqual(await shown(main, 'wfh@x.com'), [true, 200, true], 'the home account: shown by default');
+    assert.deepEqual(await shown(main, 'off@x.com'), [false, 403, false], 'usage: false');
+    assert.equal((await main.requestAs('off@x.com', 'GET', '/api/sessions')).body.sessions[0].context?.window > 0, true, 'the context bar stays');
+  } finally { await main.stop(); }
+  const sub = await startApi({ TMUX_WEB_CLAUDE_COMMAND: '^sleep$', TMUX_WEB_CLAUDE_PROJECTS: projects, ALLOWED_EMAILS, TMUX_WEB_ACCOUNT: 'sub' });
+  try {
+    sub.writeUsers({ home: 'main', accounts: ['sub'], users: people });
+    sub.start('kids', '-c', work, 'sleep 600');
+    assert.deepEqual(await shown(sub, 'kid@x.com'), [false, 403, false], 'another Unix account: not by default');
+    assert.deepEqual(await shown(sub, 'boss@x.com'), [true, 200, true], 'an admin there sees it');
+    sub.writeUsers({ home: 'main', accounts: ['sub'], users: { ...people, 'kid@x.com': { account: 'sub', usage: true } } });
+    assert.deepEqual(await shown(sub, 'kid@x.com'), [true, 200, true], 'unless usage: true');
+  } finally { await sub.stop(); }
+});
+
 test('spend: the weekly rate from the usage history, labels by who may see what, and a restart from the saved index', async () => {
   const t = now();
   const root = path.join(dir, 'projects2');
