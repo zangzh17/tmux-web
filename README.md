@@ -46,6 +46,8 @@ terminal and it stays there until the page is opened again; a plain shell opens 
   Shift+Enter starts a new line; on a phone Enter is a new line and **Send** sends. On a phone, while you write (the box focused,
   or not empty) the box takes the whole width and its buttons move to a row under it. The box grows with the text up to what the
   keyboard leaves (the heading, open panels and a strip of the conversation stay), and the line with the caret stays in view.
+  A message not yet sent is kept in the browser per session until it is sent (or for 14 days): Done, going back to the list or
+  a reload (a phone after switching apps) brings it back in the box.
   The ⤢ button opens a **full-screen editor**: only the message, under one bar with **Conversation** (back, the message kept, at
   the place you were reading), the character count, Upload and Send; sending from it goes back to the conversation at the end.
   Esc on a keyboard leaves the editor first. Your message shows dimmed

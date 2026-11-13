@@ -33,6 +33,7 @@
   const store = {
     get: (k) => { try { return localStorage.getItem(`tmuxweb.${k}`); } catch { return null; } },
     set: (k, v) => { try { localStorage.setItem(`tmuxweb.${k}`, v); } catch { /* private mode */ } },
+    del: (k) => { try { localStorage.removeItem(`tmuxweb.${k}`); } catch { /* private mode */ } },
   };
   const coarse = matchMedia('(pointer: coarse)').matches
     || (navigator.maxTouchPoints > 0 && /iPhone|iPad|Macintosh|Android/.test(navigator.userAgent));
@@ -672,6 +673,7 @@
         }
         $composer.hidden = readOnly; // before the layout: it takes height, and "at the bottom" must be measured without it changing
         setComposerEnabled(true);
+        restoreDraft();
         layoutChat({ bottom: true });
         if (!$textStatus.classList.contains('error')) chatStatus();
         updateWorking();
@@ -744,6 +746,44 @@
     syncSend();
   }
   const syncSend = () => { $composerSend.disabled = sending || $composerInput.disabled || !$composerInput.value.trim(); };
+  // The message being written is kept in this browser, per session (and account page), until it is sent: closing the Read view,
+  // going back to the list, or the page reloading (as a phone does after switching apps) must not lose it.
+  const DRAFT = 'draft.';
+  const DRAFT_DAYS = 14;
+  const draftKey = () => (sessionId && !readOnly ? `${DRAFT}${location.pathname.replace(/[^/]*$/, '')}${sessionId}.${sessionInstance}` : null);
+  let draftTimer = null;
+  function saveDraft() {
+    clearTimeout(draftTimer);
+    draftTimer = null;
+    const key = draftKey();
+    if (!key) return;
+    const text = $composerInput.value;
+    if (text.trim()) store.set(key, JSON.stringify({ text, at: Date.now() })); else store.del(key);
+  }
+  const saveDraftSoon = () => { clearTimeout(draftTimer); draftTimer = setTimeout(saveDraft, 400); };
+  function restoreDraft() {
+    const key = draftKey();
+    if (!key || $composerInput.value) return; // what is in the box is newer
+    let text = '';
+    try { text = JSON.parse(store.get(key) || 'null')?.text || ''; } catch { /* not ours */ }
+    if (!text) return;
+    $composerInput.value = text;
+    syncSend();
+    autoGrow();
+  }
+  // drafts of sessions long gone
+  try {
+    const old = Date.now() - DRAFT_DAYS * 86400000;
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (!k?.startsWith(`tmuxweb.${DRAFT}`)) continue;
+      let at = 0;
+      try { at = JSON.parse(localStorage.getItem(k))?.at || 0; } catch { /* broken: drop it */ }
+      if (at < old) localStorage.removeItem(k);
+    }
+  } catch { /* no storage */ }
+  addEventListener('pagehide', () => { if (draftTimer) saveDraft(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && draftTimer) saveDraft(); }); // iOS may discard a hidden tab without pagehide
   // The message box grows with its text up to the room the screen leaves it: the heading, the open panels and a strip of the
   // conversation stay, and the box's bottom never goes under the keyboard (iOS keeps innerHeight when the keyboard is up, so
   // the old 32 % of innerHeight could be taller than everything above the keyboard: the end of a long message was out of sight).
@@ -848,7 +888,8 @@
     try {
       await postInput({ text });
       entry.sent = true;
-      $composerInput.value = '';
+      if ($composerInput.value.replace(/\r\n?/g, '\n').trim() === text) $composerInput.value = ''; // not what was typed while it went
+      saveDraft();
       if (isEditing()) { editorReturn = { bottom: true }; setEditor(false); } // back to the conversation, at the message just sent
       autoGrow();
       fastUntil = Date.now() + 10000;
@@ -912,7 +953,7 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden && mode === 'chat' && $textDialog.open) pollSoon(0); });
 
   // Keyboard and taps: Enter sends on desktop; on a phone Enter is a new line and Send sends.
-  $composerInput.addEventListener('input', () => { autoGrow(); syncSend(); countChars(); $composerError.hidden = true; });
+  $composerInput.addEventListener('input', () => { autoGrow(); syncSend(); countChars(); saveDraftSoon(); $composerError.hidden = true; });
   $composerInput.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter' || event.isComposing || event.shiftKey) return;
     if (coarse && !event.ctrlKey && !event.metaKey) return;
@@ -1039,7 +1080,7 @@
     $working.hidden = true;
     $jump.hidden = true;
     $composerError.hidden = true;
-    $composerInput.value = '';
+    saveDraft(); // the message stays in the box (and in this browser) for the next time the view opens
     $textDialog.classList.remove('typing', 'editing');
     $editorBar.hidden = true;
     editorReturn = null;
@@ -1477,6 +1518,7 @@
     $composerInput.setSelectionRange(at + insert.length, at + insert.length);
     autoGrow();
     syncSend();
+    saveDraft();
     $composerInput.focus();
   }
   $uploadPaste.addEventListener('click', () => {
@@ -2820,6 +2862,7 @@
     box.value = before + text + box.value.slice(box.selectionEnd ?? at);
     autoGrow();
     syncSend();
+    saveDraft();
     $files.close();
     box.focus();
     box.setSelectionRange(at + text.length, at + text.length);
