@@ -428,3 +428,18 @@ body.off #create, body.off #list-bar, body.off #list, body.off .foot, body.off #
 .pill-spend.gemini[data-sev="warn"] b { color: var(--warn); }
 .pill-spend.gemini[data-sev="bad"] b { color: var(--bad); }
 @media (max-width: 420px) { .gq-gauges { flex: 1 1 100%; justify-content: space-around; } }
+/* the default tab: ☆ on each tab, ★ on the default one; the pill leads with the default's limits */
+.usage-tab-wrap { position: relative; display: flex; min-width: 0; }
+.usage-tab-wrap .usage-tab { flex: 1 1 auto; padding-right: 40px; }
+.usage-pin { position: absolute; top: 50%; right: 6px; width: 30px; height: 30px; margin-top: -15px; border: 0; border-radius: 8px; background: none; color: var(--muted); font-size: 1rem; line-height: 1; cursor: pointer; opacity: 0.55; touch-action: manipulation; transition: opacity 0.15s, color 0.15s, background 0.15s; }
+.usage-pin:hover, .usage-pin:focus-visible { opacity: 1; background: color-mix(in srgb, var(--muted) 12%, transparent); }
+.usage-pin:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.usage-tab-wrap.is-default .usage-pin { color: var(--warn); opacity: 1; }
+.usage-tab-wrap.claude .usage-tab { --ag: var(--claude); }
+.usage-tab-wrap.gemini .usage-tab { --ag: var(--gemini); }
+.gemini-gauge .gauge-label { display: inline-flex; align-items: center; gap: 2px; }
+.gemini-gauge .agent-glyph { font-size: 0.7rem; }
+.usage-pill[data-lead="gemini"] .pill-spend.gemini { order: -1; padding-left: 9px; border-left: 1px solid var(--border); }
+.usage-pill[data-lead="gemini"] .gemini-gauge { order: -2; }
+.usage-pill[data-lead="gemini"] .pill-spend:not(.gemini) { order: 0; }
+@media (max-width: 420px) { .usage-pill[data-lead="gemini"] .pill-spend.gemini { display: grid; } .usage-pill[data-lead="gemini"] .pill-spend:not(.gemini) { display: none; } }

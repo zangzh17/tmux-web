@@ -396,7 +396,8 @@ async function switchAccount(req, user, name) {
 // same kind: keys are "<phone|tablet|desktop>.<name>", so an iPhone and an iPad keep their own sizes. One small JSON file,
 // { "<email>": { "<key>": "<value>" } }, written atomically (TMUX_WEB_PREFS, default ~/.local/state/tmux-web/prefs.json).
 const PREFS_FILE = process.env.TMUX_WEB_PREFS || path.join(os.homedir(), '.local', 'state', 'tmux-web', 'prefs.json');
-const PREF_KEY = /^(?:phone|tablet|desktop)\.(?:fs|readScale|readWidth|view)$(?![\s\S])/;
+// usage.default: the usage panel's default tab (claude | gemini), the same on every device
+const PREF_KEY = /^(?:(?:phone|tablet|desktop)\.(?:fs|readScale|readWidth|view)|usage\.default)$(?![\s\S])/;
 const PREF_VALUE = /^[A-Za-z0-9.-]{1,16}$(?![\s\S])/;
 let prefsWrite = Promise.resolve();
 function readPrefs() {
@@ -1902,7 +1903,7 @@ async function geminiSpendReport(user) {
   if (!gspend.ready) {
     scanGeminiSpend(SPEND_DAYS);
     await Promise.race([gspend.scan, new Promise((resolve) => setTimeout(resolve, 1500))]);
-    if (!gspend.ready) return { ready: false, quota: await geminiQuota() };
+    if (!gspend.ready) return { ready: false, quota: geminiQuota() };
   } else if (!gspend.scan) await scanGeminiSpend(SPEND_DAYS);
   const now = Math.floor(Date.now() / 1000);
   const info = await geminiSummaries();
@@ -1986,7 +1987,7 @@ async function geminiSpendReport(user) {
     named.push({ label, sub, live: !!g.open, cost: r4(g.cost), recent: r4(g.recent), hours: g.hours.map(r4), halves: g.halves.map(r4) });
   }
   if (rest.rest) named.push({ ...rest, cost: r4(rest.cost), recent: r4(rest.recent), hours: rest.hours.map(r4), halves: rest.halves.map(r4) });
-  return { ready: true, quota: await geminiQuota(), weekStart, week: r4(week), recent: r4(recent), hours, halves, groups: named, conversations: conversations.size, tokens,
+  return { ready: true, quota: geminiQuota(), weekStart, week: r4(week), recent: r4(recent), hours, halves, groups: named, conversations: conversations.size, tokens,
     kinds: Object.fromEntries(Object.entries(kinds).map(([range, k]) => [range, { input: r4(k[0]), read: r4(k[1]), output: r4(k[2]), thinking: r4(k[3]) }])),
     models: Object.fromEntries(Object.entries(models).map(([range, m]) => [range, [...m].sort((a, b) => b[1] - a[1]).map(([model, cost]) => ({ model, cost: r4(cost) }))])) };
 }

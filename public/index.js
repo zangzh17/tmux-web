@@ -595,6 +595,23 @@
       p.card.append(head, plot, p.axis, p.foot);
       $usageGrid.append(p.card);
     }
+    // Gemini's two limits for the pill, shown instead of Claude's when Gemini is the default tab
+    parts.gGauges = [['5h', '5h'], ['weekly', '7d']].map(([window, short]) => {
+      const gauge = el('span', 'gauge gemini-gauge');
+      const ring = svgEl('svg', { class: 'ring', viewBox: '0 0 36 36', 'aria-hidden': 'true' });
+      const fill = svgEl('path', { class: 'ring-fill', d: RING, pathLength: 100 });
+      fill.style.strokeDasharray = '0 100';
+      ring.append(svgEl('path', { class: 'ring-track', d: RING, pathLength: 100 }), fill);
+      const num = el('span', 'gauge-num', '0');
+      const text = el('span', 'gauge-text');
+      const label = el('span', 'gauge-label');
+      label.append(el('span', 'agent-glyph', '✦'), document.createTextNode(short));
+      text.append(num, label);
+      gauge.append(ring, text);
+      gauge.hidden = true;
+      $usagePill.append(gauge);
+      return { window, gauge, fill, num };
+    });
     parts.pillSpend = el('span', 'pill-spend');
     parts.pillSpendNum = el('b', null, '$0');
     parts.pillSpend.append(parts.pillSpendNum, el('span', 'gauge-label', '2 h'));
@@ -672,6 +689,7 @@
   }
   function labelUsage() {
     const said = LIMITS.filter((lim) => !parts[lim.key].gauge.hidden).map((lim) => `${lim.name}: ${parts[lim.key].num.dataset.value}% left`);
+    for (const g of parts.gGauges) if (!g.gauge.hidden) said.push(`Gemini ${g.window === '5h' ? '5-hour' : 'weekly'} limit: ${g.num.dataset.value}% left`);
     if (!parts.pillSpend.hidden) said.push(`last 2 hours: ${money(usage.spend.recent)} at API prices`);
     const gemini = !parts.pillGemini.hidden ? ` Gemini: ${money(usage.gemini.recent)} in the last 2 hours at Google’s API prices.` : '';
     $usagePill.title = `Claude usage. ${said.join(', ')}.${gemini}`;
@@ -717,6 +735,20 @@
       parts.pillGemini.classList.toggle('alone', !limits && parts.pillSpend.hidden);
       parts.pillGemini.dataset.sev = severity(minLeft(usage.gemini.quota)); // a Gemini limit running low colors its number
     }
+    // the default tab's limits in the pill: Gemini's (from agy's /usage) instead of Claude's when Gemini is the default
+    const gGroup = defaultTab === 'gemini' ? geminiGroup(usage.gemini?.quota) : null;
+    $usagePill.dataset.lead = gGroup ? 'gemini' : 'claude';
+    for (const lim of LIMITS) if (gGroup) parts[lim.key].gauge.hidden = true;
+    for (const g of parts.gGauges) {
+      const b = gGroup?.buckets.find((x) => x.window === g.window);
+      g.gauge.hidden = !b;
+      if (!b) continue;
+      const left = Math.round(b.resetsAt != null && b.resetsAt <= now ? 100 : b.left);
+      g.gauge.dataset.sev = severity(left);
+      g.fill.style.strokeDasharray = `${left} 100`;
+      countTo(g.num, left);
+    }
+    if (gGroup) parts.pillSpend.classList.remove('alone');
     renderTabs();
     renderSpend();
     if (usageOpen === null) {
@@ -729,18 +761,46 @@
   // ---- the panel's two accounts, counted apart: Claude (its limits and its spend) and Gemini (its spend; agy's quota cannot be
   // read). Tabs at the top when there is a Gemini part at all; the choice is remembered in this browser.
   const $usageTabs = document.getElementById('usage-tabs');
-  let provider = 'claude';
-  try { if (localStorage.getItem('tmuxweb.usageTab') === 'gemini') provider = 'gemini'; } catch { /* private mode */ }
+  // The default tab (☆/★ on each tab) wins over the last one used: it is what the panel opens on and whose rings the header
+  // pill shows, for whoever uses only one of the two for a while. Kept on the server (prefs `usage.default`, every device) and in
+  // this browser until the server answers.
+  let defaultTab = null;
+  try { const d = localStorage.getItem('tmuxweb.usageDefault'); if (d === 'claude' || d === 'gemini') defaultTab = d; } catch { /* private mode */ }
+  let provider = defaultTab || 'claude';
+  try { if (!defaultTab && localStorage.getItem('tmuxweb.usageTab') === 'gemini') provider = 'gemini'; } catch { /* private mode */ }
   const tabParts = {};
+  function setDefaultTab(key) {
+    defaultTab = key;
+    try { if (key) localStorage.setItem('tmuxweb.usageDefault', key); else localStorage.removeItem('tmuxweb.usageDefault'); } catch { /* private mode */ }
+    fetch('api/prefs', { method: 'PUT', credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prefs: { 'usage.default': key } }) }).catch(() => {});
+    renderUsage();
+  }
+  fetch('api/prefs', { credentials: 'same-origin', cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((body) => {
+    const d = body?.prefs?.['usage.default'];
+    const next = d === 'claude' || d === 'gemini' ? d : null;
+    if (next === defaultTab) return;
+    defaultTab = next;
+    try { if (next) localStorage.setItem('tmuxweb.usageDefault', next); else localStorage.removeItem('tmuxweb.usageDefault'); } catch { /* private mode */ }
+    if (next) provider = next;
+    if (usage) renderUsage();
+  }).catch(() => {});
   function renderTabs() {
     const gemini = usage?.gemini;
     $usageTabs.hidden = !gemini;
     if (!gemini && provider === 'gemini') provider = 'claude';
     if (!tabParts.claude) {
       for (const key of ['claude', 'gemini']) {
+        const wrap = el('div', `usage-tab-wrap ${key}`);
         const b = el('button', `usage-tab ${key}`);
         b.type = 'button';
         b.setAttribute('role', 'tab');
+        const pin = el('button', 'usage-pin');
+        pin.type = 'button';
+        pin.addEventListener('click', () => {
+          const next = defaultTab === key ? null : key;
+          if (next && provider !== key) b.click();
+          setDefaultTab(next);
+        });
         const name = el('span', 'usage-tab-name');
         name.append(el('span', 'agent-glyph', AGENTS[key].glyph), document.createTextNode(AGENTS[key].label));
         const sub = el('span', 'usage-tab-sub');
@@ -754,37 +814,43 @@
           renderSpend();
           for (const card of [...LIMITS.map((lim) => parts[lim.key]?.card).filter(Boolean), $spendCard]) { card.classList.remove('draw'); void card.offsetWidth; card.classList.add('draw'); }
         });
-        tabParts[key] = { b, sub };
-        $usageTabs.append(b);
+        tabParts[key] = { b, sub, pin, wrap };
+        wrap.append(b, pin);
+        $usageTabs.append(wrap);
       }
     }
     const claudeLeft = LIMITS.filter((lim) => usage?.[lim.key]).map((lim) => `${parts[lim.key]?.num.dataset.value ?? '–'}% ${lim.short}`).join(' · ');
     tabParts.claude.sub.textContent = [claudeLeft && `${claudeLeft} left`, usage?.spend?.ready ? `${moneyShort(usage.spend.week)} wk` : ''].filter(Boolean).join(' · ') || 'limits and spend';
     const gLeft = minLeft(gemini?.quota);
-    tabParts.gemini.sub.textContent = [gemini?.ready ? `${moneyShort(gemini.week)} · 7 d` : gemini ? 'reading…' : '', gemini?.quota?.groups.length ? `${Math.round(gLeft)}% left` : ''].filter(Boolean).join(' · ');
+    tabParts.gemini.sub.textContent = [gemini?.ready ? `${moneyShort(gemini.week)} · 7 d` : gemini ? 'reading…' : '', geminiGroup(gemini?.quota) ? `${Math.round(gLeft)}% left` : ''].filter(Boolean).join(' · ');
     for (const key of ['claude', 'gemini']) {
-      tabParts[key].b.setAttribute('aria-selected', String(provider === key));
-      tabParts[key].b.tabIndex = provider === key ? 0 : -1;
+      const t = tabParts[key];
+      t.b.setAttribute('aria-selected', String(provider === key));
+      t.b.tabIndex = provider === key ? 0 : -1;
+      const on = defaultTab === key;
+      t.wrap.classList.toggle('is-default', on);
+      t.pin.textContent = on ? '★' : '☆';
+      t.pin.setAttribute('aria-pressed', String(on));
+      t.pin.title = on ? `${AGENTS[key].label} is the default: the panel opens on it and the header shows its limits. Click to stop` : `Make ${AGENTS[key].label} the default: the panel opens on it and the header shows its limits`;
+      t.pin.setAttribute('aria-label', t.pin.title);
     }
     $usagePanel.dataset.provider = provider;
     $usageGrid.hidden = provider !== 'claude';
     renderGeminiLimits();
   }
 
-  // ---- Gemini's limits as Google reports them for agy's login (api/usage gemini.quota): groups of models sharing a 5-hour and a
-  // weekly limit, each a ring of what is left and when it resets, and single models below 100%. On Google AI Ultra the Gemini 4
-  // models are in no group: they have no reported limit, which the card says rather than showing nothing.
+  // ---- Gemini's limits as agy's /usage shows them (api/usage gemini.quota): groups of models sharing a 5-hour and a weekly
+  // limit, each a ring of what is left and when it resets; the Gemini group first.
   const $geminiLimits = document.getElementById('gemini-limits');
   const GQ_ERRORS = {
-    'login expired': 'agy’s login here has expired; the numbers move again once agy runs',
     'not signed in': 'agy is signed out on this account',
-    'unreadable login': 'agy’s login could not be read from the keyring',
-    'login refused': 'Google refused agy’s login',
-    'rate limited': 'Google asked to slow down; trying again later',
-    unreachable: 'Google could not be reached; trying again',
+    'no answer': 'agy did not show its /usage panel in time; trying again later',
+    unreadable: 'agy’s /usage could not be read; trying again later',
   };
   const WINDOW_NAME = { '5h': '5-hour', weekly: 'Weekly', daily: 'Daily' };
-  const minLeft = (q) => Math.min(100, ...(q?.groups || []).flatMap((g) => g.buckets.map((b) => b.left)));
+  // the group agy calls Gemini models (the others are the Claude/GPT models agy can also run)
+  const geminiGroup = (q) => (q?.groups || []).find((g) => /gemini/i.test(g.name)) || null;
+  const minLeft = (q) => Math.min(100, ...(geminiGroup(q)?.buckets || []).map((b) => b.left));
   function gqRing(left) {
     const svg = svgEl('svg', { class: 'ring', viewBox: '0 0 36 36', 'aria-hidden': 'true' });
     const fill = svgEl('path', { class: 'ring-fill', d: RING, pathLength: 100 });
@@ -802,7 +868,8 @@
     if (q.plan) title.append(el('small', null, q.plan));
     head.append(title);
     const body = [head];
-    for (const g of q.groups) {
+    // the other groups (Claude and GPT models through agy) only once they have been used: on their own they are noise here
+    for (const g of [...q.groups].filter((x) => /gemini/i.test(x.name) || x.buckets.some((b) => b.left < 100)).sort((a, b) => /gemini/i.test(b.name) - /gemini/i.test(a.name))) {
       const row = el('div', 'gq-group');
       const name = el('div', 'gq-name');
       name.append(el('b', null, g.name || 'Models'), el('span', null, g.about));
@@ -823,24 +890,11 @@
       row.append(name, gauges);
       body.push(row);
     }
-    const low = q.models.filter((m) => m.left < 100);
-    if (low.length) {
-      const list = el('div', 'gq-models');
-      list.append(el('span', 'gq-models-label', 'Models below 100%'));
-      for (const m of low.sort((a, b) => a.left - b.left)) {
-        const chip = el('span', 'gq-chip');
-        chip.dataset.sev = severity(m.left);
-        chip.append(document.createTextNode(`${modelName(m.model.replace(/-(low|medium|high)$/, ''))}${/-(low|medium|high)$/.test(m.model) ? ` ${m.model.split('-').pop()}` : ''} `), el('b', null, `${Math.round(m.left)}%`));
-        list.append(chip);
-      }
-      body.push(list);
-    }
-    const geminiCovered = q.groups.some((g) => /gemini/i.test(`${g.name} ${g.about}`));
     const notes = [];
-    if (!q.groups.length && q.at == null) notes.push(GQ_ERRORS[q.error] || 'Asking Google for the limits…');
+    if (q.at == null) notes.push(q.reading || !q.error ? 'Reading agy’s /usage…' : GQ_ERRORS[q.error] || 'Could not read agy’s /usage.');
     else {
-      if (!geminiCovered) notes.push(`Google reports no limit for the Gemini 4 models${q.plan ? ` on ${q.plan}` : ''}; the limits above are for the other models agy can run.`);
-      if (q.error && GQ_ERRORS[q.error]) notes.push(`${GQ_ERRORS[q.error]}${q.at ? ` · updated ${ago(now - q.at).toLowerCase()}` : ''}.`);
+      notes.push(`As agy’s /usage shows it, read every 10 minutes while this page is open · updated ${ago(now - q.at).toLowerCase()}.`);
+      if (q.error && GQ_ERRORS[q.error]) notes.push(`${GQ_ERRORS[q.error]}.`);
     }
     body.push(el('p', 'gq-note', notes.join(' ')));
     $geminiLimits.replaceChildren(...body);
@@ -865,7 +919,7 @@
     renderUsage();
     // the first reading of the transcripts takes a few seconds: ask again soon rather than in a minute
     clearTimeout(spendRetry);
-    if (((usage?.spend && !usage.spend.ready) || (usage?.gemini && !usage.gemini.ready)) && !document.hidden) spendRetry = setTimeout(loadUsage, 3000);
+    if (((usage?.spend && !usage.spend.ready) || (usage?.gemini && !usage.gemini.ready) || usage?.gemini?.quota?.reading) && !document.hidden) spendRetry = setTimeout(loadUsage, 3000);
   }
 
   // ---- what Claude cost at API prices (api/usage `spend`): the week so far and the last two hours, each as a share of the weekly

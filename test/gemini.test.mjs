@@ -164,44 +164,44 @@ test('gemini: the pane\'s conversation in the list, the Read view, input and the
   } finally { await api.stop(); }
 });
 
-test('gemini quota: the login from the keyring, Google\'s groups and per-model limits, an expired login left alone', async () => {
-  const http = await import('node:http');
+test('gemini quota: agy\'s own /usage panel read in a private tmux (trust prompt, groups, windows), and agy ended afterwards', async () => {
   const root = path.join(dir, 'gemini-q');
   fs.mkdirSync(path.join(root, 'conversations'), { recursive: true });
-  const asked = [];
-  const reset = new Date(Date.now() + 3 * 3600_000).toISOString();
-  const google = http.createServer((req, res) => {
-    let body = '';
-    req.on('data', (d) => { body += d; });
-    req.on('end', () => {
-      asked.push([req.url, req.headers.authorization, JSON.parse(body || '{}')]);
-      res.setHeader('content-type', 'application/json');
-      if (req.url.endsWith(':loadCodeAssist')) res.end(JSON.stringify({ cloudaicompanionProject: 'proj-1', paidTier: { name: 'Google AI Ultra' } }));
-      else if (req.url.endsWith(':retrieveUserQuotaSummary')) res.end(JSON.stringify({ groups: [{ displayName: 'Claude and GPT models', description: 'Models within this group: Claude Opus 5.5', buckets: [
-        { bucketId: '3p-weekly', displayName: 'Weekly Limit Remaining', window: 'weekly', resetTime: reset, remainingFraction: 0.8 },
-        { bucketId: '3p-5h', displayName: 'Five Hour Limit Remaining', window: '5h', resetTime: reset, remainingFraction: 0.255 }] }] }));
-      else res.end(JSON.stringify({ buckets: [{ modelId: 'claude-opus-5-5-high', remainingFraction: 0.5, resetTime: reset }, { modelId: 'tab_flash_lite_preview', remainingFraction: 1 }] }));
-    });
-  });
-  await new Promise((resolve) => google.listen(0, '127.0.0.1', resolve));
-  const later = new Date(Date.now() + 3600_000).toISOString();
-  const env = (expiry) => ({ TMUX_WEB_GEMINI_DIR: root, TMUX_WEB_GEMINI_QUOTA_URL: `http://127.0.0.1:${google.address().port}/v1internal`,
-    TMUX_WEB_GEMINI_TOKEN_CMD: `echo '{"access_token": "tok-123", "expiry": "${expiry}"}'` });
-  let api = await startApi(env(later));
+  const fake = path.join(dir, 'fake-agy.mjs');
+  const pidFile = path.join(dir, 'fake-agy.pid');
+  // draws what agy 1.5 draws: a trust question, a prompt between rules, and on `/usage` + Enter the Models & Quota panel
+  fs.writeFileSync(fake, `#!${process.execPath}
+import fs from 'node:fs';
+fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+process.on('SIGHUP', () => {}); // like agy: a killed tmux does not end it
+process.stdin.setRawMode(true);
+const out = (s) => process.stdout.write(s.replace(/\\n/g, '\\r\\n'));
+let trusted = false; let typed = '';
+out('Do you trust the contents of this project?\\n> Yes, I trust this folder\\n  No, exit\\n');
+process.stdin.on('data', (d) => {
+  const k = d.toString();
+  if (!trusted) { if (k.includes('\\r')) { trusted = true; out('\\x1b[2J\\x1b[H  user@example.com (Google AI Ultra)\\n' + '─'.repeat(40) + '\\n>\\n' + '─'.repeat(40) + '\\n'); } return; }
+  typed += k;
+  if (typed.includes('/usage') && k.includes('\\r')) out('└ Models & Quota\\n  Account: user@example.com\\nGEMINI MODELS\\n  Models within this group: Gemini 4 Neon, Gemini 4 Argon,\\n  Weekly Limit Remaining\\n    [████░] 91.07%\\n    Refreshes in 155h 44m\\n  Five Hour Limit Remaining\\n    [████░] 8.5%\\n    Refreshes in 4h 52m\\nCLAUDE AND GPT MODELS\\n  Models within this group: Claude Opus 5.5\\n  Weekly Limit Remaining\\n    [█████] 100.00%\\n    Quota available\\n  ↑/↓ Scroll · esc Close\\n');
+});
+setInterval(() => {}, 1000);
+`, { mode: 0o755 });
+  const api = await startApi({ TMUX_WEB_GEMINI_DIR: root, TMUX_WEB_AGY_BIN: fake, TMUX_WEB_AGY_DIR: path.join(dir, 'agy-usage') });
   try {
-    const q = (await api.request('GET', '/api/usage')).body.gemini.quota;
+    let q = (await api.request('GET', '/api/usage')).body.gemini.quota;
+    assert.equal(q.reading, true, 'the first answer starts a reading in the background');
+    for (let i = 0; i < 60 && (q.reading || q.at == null); i++) { await delay(250); q = (await api.request('GET', '/api/usage')).body.gemini.quota; }
+    const t = Math.floor(Date.now() / 1000);
     assert.deepEqual([q.error, q.plan], [null, 'Google AI Ultra']);
-    assert.deepEqual(q.groups, [{ name: 'Claude and GPT models', about: 'Claude Opus 5.5', buckets: [
-      { window: 'weekly', name: 'Weekly Limit Remaining', left: 80, resetsAt: Math.floor(Date.parse(reset) / 1000) },
-      { window: '5h', name: 'Five Hour Limit Remaining', left: 25.5, resetsAt: Math.floor(Date.parse(reset) / 1000) }] }]);
-    assert.deepEqual(q.models.map((m) => [m.model, m.left]), [['claude-opus-5-5-high', 50]], 'no tab-completion models');
-    assert.deepEqual(asked.map((a) => [a[0], a[1], a[2].project ?? null]), [
-      ['/v1internal:loadCodeAssist', 'Bearer tok-123', null], ['/v1internal:retrieveUserQuotaSummary', 'Bearer tok-123', 'proj-1'], ['/v1internal:retrieveUserQuota', 'Bearer tok-123', 'proj-1']]);
+    assert.deepEqual(q.groups.map((g) => [g.name, g.about, g.buckets.map((b) => [b.window, b.left])]), [
+      ['Gemini Models', 'Gemini 4 Neon, Gemini 4 Argon', [['weekly', 91.07], ['5h', 8.5]]],
+      ['Claude and GPT Models', 'Claude Opus 5.5', [['weekly', 100]]],
+    ]);
+    assert.ok(Math.abs(q.groups[0].buckets[0].resetsAt - (t + 155 * 3600 + 44 * 60)) < 30);
+    assert.equal(q.groups[1].buckets[0].resetsAt, null, 'quota available: nothing to refresh');
+    const pid = +fs.readFileSync(pidFile, 'utf8');
+    await delay(300);
+    assert.throws(() => process.kill(pid, 0), 'agy was ended by its PID');
+    assert.equal((await api.request('GET', '/api/sessions')).body.sessions.length, 0, 'the private tmux is not in the list');
   } finally { await api.stop(); }
-  asked.length = 0;
-  api = await startApi(env(new Date(Date.now() - 1000).toISOString()));
-  try {
-    const q = (await api.request('GET', '/api/usage')).body.gemini.quota;
-    assert.deepEqual([q.error, q.at, asked.length], ['login expired', null, 0], 'an expired token is never sent (agy refreshes it, not this)');
-  } finally { await api.stop(); google.close(); }
 });
