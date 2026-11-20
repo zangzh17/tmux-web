@@ -8,7 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <title>Tmux sessions</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="app.css?v=20261120-gemini">
+<link rel="stylesheet" href="app.css?v=20261120-gquota">
 </head>
 <body>
 <main>
@@ -25,6 +25,7 @@
     <div class="usage-inner">
       <div class="usage-tabs" id="usage-tabs" role="tablist" aria-label="Whose usage" hidden></div>
       <div class="usage-grid" id="usage-grid"></div>
+      <article class="gq-card" id="gemini-limits" aria-label="Gemini limits" hidden></article>
       <article class="sp-card" id="spend-card" aria-labelledby="spend-title" hidden></article>
       <p class="usage-note" id="usage-note"></p>
     </div>
@@ -93,6 +94,6 @@
     <button id="close-confirm" class="confirm" type="button">Close session</button>
   </div>
 </dialog>
-<script src="index.js?v=20261120-gemini"></script>
+<script src="index.js?v=20261120-gquota"></script>
 </body>
 </html>

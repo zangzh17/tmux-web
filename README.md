@@ -98,7 +98,14 @@ a card carries a **Claude** (clay) or **Gemini** (blue to violet) mark and a str
 than one kind a segmented filter (**All · Claude · Gemini · Terminal**, with counts, remembered per browser) narrows it. A Gemini
 card shows its context (of a 1M window) and its spend at Google's API list prices (Neon $3/$15, cached $0.15 per million;
 Hydrogen half that; Argon $2/$10, doubling on 2026-12-01; 3.8 Flash $0.75/$3.75; thinking billed as output; anything unknown
-as Neon), without a share of a limit: agy's quota is behind a login kept in the system keyring, which is not read. The header
+as Neon), without a share of a limit. The Gemini tab's **Limits** card shows what Google reports for agy's login: groups of
+models sharing a 5-hour and a weekly limit (a ring of what is left and when it resets) and single models below 100%. On Google AI
+Ultra only the "Claude and GPT models" group has limits; the Gemini 4 models have none reported, and the card says so. The login
+is agy's OAuth token in the system keyring (Secret Service, service=gemini, username=antigravity), read with python3's libsecret
+binding and used as it is: never refreshed (agy does that while it runs), so after an hour without agy the last answer stands
+(`login expired`). It asks `daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist`, `:retrieveUserQuotaSummary` and
+`:retrieveUserQuota` every 5 minutes once wanted (`TMUX_WEB_GEMINI_QUOTA_URL`, `TMUX_WEB_GEMINI_TOKEN_CMD` for tests) and keeps
+the answer, no token, in `TMUX_WEB_GEMINI_QUOTA` (default `~/.local/state/tmux-web/gemini-quota.json`). The header
 pill adds Gemini's last two hours (✦), and the usage panel gets two tabs, **Claude** (limits and spend, as before) and
 **Gemini** (the same spend card: the last 7 days and conversations, the last 2 hours, tokens, the chart and list by
 conversation, input / cached input / response / thinking, models). The Read view shows a Gemini conversation in its own cool
@@ -110,7 +117,7 @@ Only finished steps become items, so the list only grows; a rewound conversation
 like Claude's, every minute once wanted, in `TMUX_WEB_GEMINI_SPEND` (default `~/.local/state/tmux-web/gemini-spend.json`, numbers
 only); the model is a number in agy's records, mapped in gemini.mjs (`TMUX_WEB_GEMINI_MODELS` adds more as JSON). Uses
 `node:sqlite` (Node 22.5+), read-only. `GET /api/sessions` gives each session `agent: 'claude' | 'gemini' | null`; the
-transcript answers `agent` too; `GET /api/usage` adds `gemini: {ready, weekStart, week, recent, hours, halves, groups, kinds,
+transcript answers `agent` too; `GET /api/usage` adds `gemini: {ready, quota: {at, error, plan, groups, models}, weekStart, week, recent, hours, halves, groups, kinds,
 models, tokens, conversations}` (null where agy has never run).
 The Read view's **Aa** button opens a row with **Size** (A−/A+ or the slider, 80–500 %, scales everything in the text including code and
 tool steps) and **Width** (Normal 760 px, Wide 1100 px, Full).

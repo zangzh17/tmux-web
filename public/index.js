@@ -715,6 +715,7 @@
     if (geminiUsed) {
       parts.pillGeminiNum.textContent = moneyShort(usage.gemini.recent);
       parts.pillGemini.classList.toggle('alone', !limits && parts.pillSpend.hidden);
+      parts.pillGemini.dataset.sev = severity(minLeft(usage.gemini.quota)); // a Gemini limit running low colors its number
     }
     renderTabs();
     renderSpend();
@@ -759,13 +760,90 @@
     }
     const claudeLeft = LIMITS.filter((lim) => usage?.[lim.key]).map((lim) => `${parts[lim.key]?.num.dataset.value ?? '–'}% ${lim.short}`).join(' · ');
     tabParts.claude.sub.textContent = [claudeLeft && `${claudeLeft} left`, usage?.spend?.ready ? `${moneyShort(usage.spend.week)} wk` : ''].filter(Boolean).join(' · ') || 'limits and spend';
-    tabParts.gemini.sub.textContent = gemini?.ready ? `${moneyShort(gemini.week)} · 7 d` : gemini ? 'reading…' : '';
+    const gLeft = minLeft(gemini?.quota);
+    tabParts.gemini.sub.textContent = [gemini?.ready ? `${moneyShort(gemini.week)} · 7 d` : gemini ? 'reading…' : '', gemini?.quota?.groups.length ? `${Math.round(gLeft)}% left` : ''].filter(Boolean).join(' · ');
     for (const key of ['claude', 'gemini']) {
       tabParts[key].b.setAttribute('aria-selected', String(provider === key));
       tabParts[key].b.tabIndex = provider === key ? 0 : -1;
     }
     $usagePanel.dataset.provider = provider;
     $usageGrid.hidden = provider !== 'claude';
+    renderGeminiLimits();
+  }
+
+  // ---- Gemini's limits as Google reports them for agy's login (api/usage gemini.quota): groups of models sharing a 5-hour and a
+  // weekly limit, each a ring of what is left and when it resets, and single models below 100%. On Google AI Ultra the Gemini 4
+  // models are in no group: they have no reported limit, which the card says rather than showing nothing.
+  const $geminiLimits = document.getElementById('gemini-limits');
+  const GQ_ERRORS = {
+    'login expired': 'agy’s login here has expired; the numbers move again once agy runs',
+    'not signed in': 'agy is signed out on this account',
+    'unreadable login': 'agy’s login could not be read from the keyring',
+    'login refused': 'Google refused agy’s login',
+    'rate limited': 'Google asked to slow down; trying again later',
+    unreachable: 'Google could not be reached; trying again',
+  };
+  const WINDOW_NAME = { '5h': '5-hour', weekly: 'Weekly', daily: 'Daily' };
+  const minLeft = (q) => Math.min(100, ...(q?.groups || []).flatMap((g) => g.buckets.map((b) => b.left)));
+  function gqRing(left) {
+    const svg = svgEl('svg', { class: 'ring', viewBox: '0 0 36 36', 'aria-hidden': 'true' });
+    const fill = svgEl('path', { class: 'ring-fill', d: RING, pathLength: 100 });
+    fill.style.strokeDasharray = `${left} 100`;
+    svg.append(svgEl('path', { class: 'ring-track', d: RING, pathLength: 100 }), fill);
+    return svg;
+  }
+  function renderGeminiLimits() {
+    const q = usage?.gemini?.quota;
+    $geminiLimits.hidden = provider !== 'gemini' || !q;
+    if ($geminiLimits.hidden) return;
+    const now = Date.now() / 1000;
+    const head = el('div', 'sp-head');
+    const title = el('h3', null, 'Limits');
+    if (q.plan) title.append(el('small', null, q.plan));
+    head.append(title);
+    const body = [head];
+    for (const g of q.groups) {
+      const row = el('div', 'gq-group');
+      const name = el('div', 'gq-name');
+      name.append(el('b', null, g.name || 'Models'), el('span', null, g.about));
+      const gauges = el('div', 'gq-gauges');
+      for (const b of g.buckets) {
+        const open = b.resetsAt == null || b.resetsAt > now;
+        const left = Math.round(open ? b.left : 100);
+        const gauge = el('div', 'gq-gauge');
+        gauge.dataset.sev = severity(left);
+        const text = el('div', 'gq-text');
+        const num = el('b', 'gq-num', String(left));
+        const label = el('span', 'gq-label', `${WINDOW_NAME[b.window] || b.window || b.name} left`);
+        text.append(num, label, el('span', 'gq-reset', b.resetsAt ? (open ? `resets in ${span(b.resetsAt - now)}` : 'reset') : ''));
+        gauge.append(gqRing(left), text);
+        gauge.title = `${b.name || b.window}: ${left}% left${b.resetsAt ? `, resets ${clock(b.resetsAt, true)}` : ''}`;
+        gauges.append(gauge);
+      }
+      row.append(name, gauges);
+      body.push(row);
+    }
+    const low = q.models.filter((m) => m.left < 100);
+    if (low.length) {
+      const list = el('div', 'gq-models');
+      list.append(el('span', 'gq-models-label', 'Models below 100%'));
+      for (const m of low.sort((a, b) => a.left - b.left)) {
+        const chip = el('span', 'gq-chip');
+        chip.dataset.sev = severity(m.left);
+        chip.append(document.createTextNode(`${modelName(m.model.replace(/-(low|medium|high)$/, ''))}${/-(low|medium|high)$/.test(m.model) ? ` ${m.model.split('-').pop()}` : ''} `), el('b', null, `${Math.round(m.left)}%`));
+        list.append(chip);
+      }
+      body.push(list);
+    }
+    const geminiCovered = q.groups.some((g) => /gemini/i.test(`${g.name} ${g.about}`));
+    const notes = [];
+    if (!q.groups.length && q.at == null) notes.push(GQ_ERRORS[q.error] || 'Asking Google for the limits…');
+    else {
+      if (!geminiCovered) notes.push(`Google reports no limit for the Gemini 4 models${q.plan ? ` on ${q.plan}` : ''}; the limits above are for the other models agy can run.`);
+      if (q.error && GQ_ERRORS[q.error]) notes.push(`${GQ_ERRORS[q.error]}${q.at ? ` · updated ${ago(now - q.at).toLowerCase()}` : ''}.`);
+    }
+    body.push(el('p', 'gq-note', notes.join(' ')));
+    $geminiLimits.replaceChildren(...body);
   }
   $usageTabs?.addEventListener('keydown', (e) => {
     if (!['ArrowLeft', 'ArrowRight'].includes(e.key) || $usageTabs.hidden) return;

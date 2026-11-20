@@ -402,3 +402,29 @@ body.off #create, body.off #list-bar, body.off #list, body.off .foot, body.off #
 .pill-spend.gemini .gauge-label { display: inline-flex; align-items: center; gap: 3px; }
 .pill-spend.gemini .agent-glyph { font-size: 0.75rem; letter-spacing: 0; }
 @media (max-width: 420px) { .pill-spend.gemini:not(.alone) { display: none; } }
+/* the Gemini tab's limits: one row per group of models (name, then a ring per window), single models below 100% as chips */
+.gq-card { margin: 0 0 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); --accent: var(--gemini); }
+.gq-group { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 18px; margin-top: 10px; padding: 10px 12px; border-radius: 11px; background: var(--peek-bg); }
+.gq-name { display: grid; gap: 2px; min-width: 0; flex: 1 1 200px; }
+.gq-name b { font-size: 0.86rem; font-weight: 650; }
+.gq-name span { color: var(--muted); font-size: 0.72rem; line-height: 1.35; }
+.gq-gauges { display: flex; gap: 18px; }
+.gq-gauge { --sev: var(--good); display: flex; align-items: center; gap: 8px; }
+.gq-gauge[data-sev="warn"] { --sev: var(--warn); }
+.gq-gauge[data-sev="bad"] { --sev: var(--bad); }
+.gq-gauge .ring { width: 38px; height: 38px; }
+.gq-text { display: grid; gap: 1px; }
+.gq-num { color: var(--sev); font: 760 1.15rem/1 system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+.gq-num::after { content: "%"; margin-left: 1px; font-size: 0.65em; font-weight: 650; }
+.gq-label { font-size: 0.72rem; font-weight: 620; }
+.gq-reset { color: var(--muted); font-size: 0.68rem; font-variant-numeric: tabular-nums; }
+.gq-models { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.gq-models-label { color: var(--muted); font: 650 0.66rem/1.2 system-ui, sans-serif; letter-spacing: 0.05em; text-transform: uppercase; }
+.gq-chip { --sev: var(--good); padding: 2px 8px; border-radius: 999px; background: var(--peek-bg); font-size: 0.74rem; }
+.gq-chip[data-sev="warn"] { --sev: var(--warn); } .gq-chip[data-sev="bad"] { --sev: var(--bad); }
+.gq-chip b { color: var(--sev); font-variant-numeric: tabular-nums; }
+.gq-note { margin: 9px 0 0; color: var(--muted); font-size: 0.7rem; line-height: 1.45; }
+.gq-note:empty { display: none; }
+.pill-spend.gemini[data-sev="warn"] b { color: var(--warn); }
+.pill-spend.gemini[data-sev="bad"] b { color: var(--bad); }
+@media (max-width: 420px) { .gq-gauges { flex: 1 1 100%; justify-content: space-around; } }

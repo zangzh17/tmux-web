@@ -12,7 +12,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { GEMINI_COMMAND, GEMINI_DIR, geminiPaneConversation, geminiTranscript, geminiContext, geminiConversationEvents, scanGeminiSpend, gspend, summaries as geminiSummaries } from './gemini.mjs';
+import { GEMINI_COMMAND, GEMINI_DIR, geminiPaneConversation, geminiTranscript, geminiContext, geminiConversationEvents, scanGeminiSpend, gspend, geminiQuota, summaries as geminiSummaries } from './gemini.mjs';
 
 const SOCK = process.env.TMUX_WEB_API_SOCK
   || path.join(process.env.XDG_RUNTIME_DIR || os.tmpdir(), 'tmux-web', 'api.sock');
@@ -1902,7 +1902,7 @@ async function geminiSpendReport(user) {
   if (!gspend.ready) {
     scanGeminiSpend(SPEND_DAYS);
     await Promise.race([gspend.scan, new Promise((resolve) => setTimeout(resolve, 1500))]);
-    if (!gspend.ready) return { ready: false };
+    if (!gspend.ready) return { ready: false, quota: await geminiQuota() };
   } else if (!gspend.scan) await scanGeminiSpend(SPEND_DAYS);
   const now = Math.floor(Date.now() / 1000);
   const info = await geminiSummaries();
@@ -1986,7 +1986,7 @@ async function geminiSpendReport(user) {
     named.push({ label, sub, live: !!g.open, cost: r4(g.cost), recent: r4(g.recent), hours: g.hours.map(r4), halves: g.halves.map(r4) });
   }
   if (rest.rest) named.push({ ...rest, cost: r4(rest.cost), recent: r4(rest.recent), hours: rest.hours.map(r4), halves: rest.halves.map(r4) });
-  return { ready: true, weekStart, week: r4(week), recent: r4(recent), hours, halves, groups: named, conversations: conversations.size, tokens,
+  return { ready: true, quota: await geminiQuota(), weekStart, week: r4(week), recent: r4(recent), hours, halves, groups: named, conversations: conversations.size, tokens,
     kinds: Object.fromEntries(Object.entries(kinds).map(([range, k]) => [range, { input: r4(k[0]), read: r4(k[1]), output: r4(k[2]), thinking: r4(k[3]) }])),
     models: Object.fromEntries(Object.entries(models).map(([range, m]) => [range, [...m].sort((a, b) => b[1] - a[1]).map(([model, cost]) => ({ model, cost: r4(cost) }))])) };
 }

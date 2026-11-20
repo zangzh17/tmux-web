@@ -429,3 +429,94 @@ export async function geminiConversationEvents(id, days) {
   if (!gspend.ready && !gspend.scan) scanGeminiSpend(days);
   return ids.flatMap((one) => gspend.dbs.get(one)?.ev || []);
 }
+
+// ---- quota: what Google reports for the agy login (Google AI Ultra here). agy keeps its OAuth token in the system keyring
+// (Secret Service item service=gemini, username=antigravity: {"token": {"access_token", "expiry", ...}}), read with python3's
+// libsecret binding (TMUX_WEB_GEMINI_TOKEN_CMD replaces the reader, for tests). The token is used as it is and never refreshed
+// (agy refreshes it while it runs); expired, the last answer stands with `error: 'login expired'`. Asked every 5 minutes once
+// wanted, and when a page wants it and the last try is over 2 minutes old:
+//   POST <base>:loadCodeAssist             -> the plan's name and the project the quota belongs to
+//   POST <base>:retrieveUserQuotaSummary   -> groups of models sharing a 5-hour and a weekly limit (remainingFraction, resetTime)
+//   POST <base>:retrieveUserQuota          -> one remaining fraction per model
+// The Gemini 4 models are in neither list on this plan: Google reports no limit for them. The answer (no token) is kept in
+// TMUX_WEB_GEMINI_QUOTA so a restart has it.
+import { execFile } from 'node:child_process';
+const QUOTA_BASE = process.env.TMUX_WEB_GEMINI_QUOTA_URL || 'https://daily-cloudcode-pa.googleapis.com/v1internal';
+const QUOTA_FILE = process.env.TMUX_WEB_GEMINI_QUOTA || path.join(os.homedir(), '.local', 'state', 'tmux-web', 'gemini-quota.json');
+const TOKEN_PY = `import gi, json
+gi.require_version('Secret', '1')
+from gi.repository import Secret
+svc = Secret.Service.get_sync(Secret.ServiceFlags.LOAD_COLLECTIONS)
+found = svc.search_sync(None, {'service': 'gemini', 'username': 'antigravity'}, Secret.SearchFlags.LOAD_SECRETS, None)
+t = json.loads(found[0].get_secret().get_text())['token'] if found else {}
+print(json.dumps({'access_token': t.get('access_token', ''), 'expiry': t.get('expiry', '')}))`;
+function readToken() {
+  const custom = process.env.TMUX_WEB_GEMINI_TOKEN_CMD;
+  return new Promise((resolve) => {
+    execFile(custom ? '/bin/sh' : 'python3', custom ? ['-c', custom] : ['-I', '-c', TOKEN_PY], { timeout: 10_000, maxBuffer: 64 << 10 }, (err, stdout) => {
+      if (err) { resolve({ error: 'unreadable login' }); return; }
+      try {
+        const t = JSON.parse(stdout);
+        if (!t.access_token) { resolve({ error: 'not signed in' }); return; }
+        const expiry = Date.parse(t.expiry);
+        resolve(Number.isFinite(expiry) && expiry < Date.now() + 30_000 ? { error: 'login expired' } : { token: t.access_token });
+      } catch { resolve({ error: 'unreadable login' }); }
+    });
+  });
+}
+const QUOTA_EVERY = 5 * 60_000;
+const QUOTA_FRESH = 2 * 60_000;
+const quota = { tried: 0, wanted: false, running: null, error: null, pausedUntil: 0, last: null, project: '', plan: '' };
+try { const v = JSON.parse(fs.readFileSync(QUOTA_FILE, 'utf8')); if (isObject(v) && Array.isArray(v.groups)) quota.last = v; } catch { /* none yet */ }
+const pct = (f) => (Number.isFinite(f) ? Math.round(Math.max(0, Math.min(1, f)) * 1000) / 10 : null);
+const when = (s) => { const t = Date.parse(s); return Number.isFinite(t) ? Math.floor(t / 1000) : null; };
+async function post(method, token, body) {
+  const res = await fetch(`${QUOTA_BASE}:${method}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'user-agent': 'antigravity' },
+    body: JSON.stringify(body), signal: AbortSignal.timeout(15_000) });
+  if (res.status === 429) { const e = new Error('rate limited'); e.retry = +res.headers.get('retry-after') || 900; throw e; }
+  if (res.status === 401 || res.status === 403) throw new Error('login refused');
+  if (!res.ok) throw new Error('unreachable');
+  return res.json();
+}
+export function pollGeminiQuota() {
+  if (!quota.wanted || Date.now() < quota.pausedUntil) return quota.running || Promise.resolve();
+  quota.running ||= (async () => {
+    quota.tried = Date.now();
+    const { token, error } = await readToken();
+    if (!token) { quota.error = error; return; }
+    try {
+      if (!quota.project) {
+        const info = await post('loadCodeAssist', token, { metadata: { ideType: 'ANTIGRAVITY', platform: 'PLATFORM_UNSPECIFIED', pluginType: 'GEMINI' } });
+        quota.project = typeof info?.cloudaicompanionProject === 'string' ? info.cloudaicompanionProject : '';
+        quota.plan = String(info?.paidTier?.name || info?.currentTier?.name || '').slice(0, 60);
+      }
+      const [summary, perModel] = await Promise.all([post('retrieveUserQuotaSummary', token, { project: quota.project }), post('retrieveUserQuota', token, { project: quota.project })]);
+      const groups = (Array.isArray(summary?.groups) ? summary.groups : []).slice(0, 8).map((g) => ({
+        name: String(g?.displayName || '').slice(0, 80), about: String(g?.description || '').replace(/^Models within this group:\s*/, '').slice(0, 200),
+        buckets: (Array.isArray(g?.buckets) ? g.buckets : []).slice(0, 4).map((b) => ({ window: String(b?.window || '').slice(0, 16), name: String(b?.displayName || '').slice(0, 60), left: pct(b?.remainingFraction), resetsAt: when(b?.resetTime) })).filter((b) => b.left != null),
+      }));
+      const models = (Array.isArray(perModel?.buckets) ? perModel.buckets : [])
+        .filter((b) => typeof b?.modelId === 'string' && !/^tab_/.test(b.modelId))
+        .map((b) => ({ model: b.modelId.slice(0, 60), left: pct(b.remainingFraction), resetsAt: when(b.resetTime) })).filter((b) => b.left != null);
+      quota.last = { at: Math.floor(Date.now() / 1000), plan: quota.plan, groups, models, about: String(summary?.description || '').slice(0, 600) };
+      quota.error = null;
+      try {
+        fs.mkdirSync(path.dirname(QUOTA_FILE), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(`${QUOTA_FILE}.tmp`, JSON.stringify(quota.last), { mode: 0o600 });
+        fs.renameSync(`${QUOTA_FILE}.tmp`, QUOTA_FILE);
+      } catch { /* kept in memory */ }
+    } catch (e) {
+      quota.error = e.message === 'login refused' || e.message === 'rate limited' ? e.message : 'unreachable';
+      if (e.retry) quota.pausedUntil = Date.now() + e.retry * 1000;
+      if (e.message === 'login refused') quota.project = '';
+    }
+  })().finally(() => { quota.running = null; });
+  return quota.running;
+}
+// { at, error, plan, groups: [{ name, about, buckets: [{ window, name, left (% left), resetsAt }] }], models: [{ model, left, resetsAt }] }
+export async function geminiQuota() {
+  quota.wanted = true;
+  if (Date.now() - quota.tried > QUOTA_FRESH) await pollGeminiQuota();
+  return { at: quota.last?.at ?? null, error: quota.error, plan: quota.last?.plan || quota.plan || '', groups: quota.last?.groups || [], models: quota.last?.models || [] };
+}
+setInterval(() => { if (quota.wanted) void pollGeminiQuota(); }, QUOTA_EVERY).unref();
