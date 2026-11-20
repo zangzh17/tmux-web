@@ -42,6 +42,7 @@ export async function startApi(extraEnv = {}) {
     TMUX_WEB_ACCOUNT: 'main', TMUX_WEB_RUN: path.join(dir, 'run'), TMUX_WEB_ACCOUNTS_DIR: path.join(dir, 'accounts'), // nor the real accounts
     TMUX_WEB_CLAUDE_CREDENTIALS: path.join(dir, 'credentials.json'), TMUX_WEB_USAGE: path.join(dir, 'usage.json'), // nor the real Claude login
     TMUX_WEB_CLAUDE_PROJECTS: path.join(dir, 'claude', 'projects'), TMUX_WEB_SPEND: path.join(dir, 'spend.json'), // nor its transcripts
+    TMUX_WEB_GEMINI_DIR: path.join(dir, 'gemini'), TMUX_WEB_GEMINI_SPEND: path.join(dir, 'gemini-spend.json'), // nor agy's conversations
     TMUX_WEB_USAGE_URL: 'http://127.0.0.1:9/usage', ...extraEnv };
   delete env.TMUX; // never inherit the developer's own tmux client
   delete env.TMUX_PANE;

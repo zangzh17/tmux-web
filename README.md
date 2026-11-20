@@ -92,6 +92,26 @@ numbers), the same as a list (a conversation open in a tmux session goes by the 
 The share of the week is measured, not guessed: between consecutive answers of the usage API in the same weekly window, the
 rise of the weekly percentage against what was spent here meanwhile, over the 8 days kept. Use of the same Claude login
 elsewhere (claude.ai, another computer) raises the percentage without a cost here, so the shares then read a little high.
+**Gemini.** Sessions running Gemini through the Antigravity CLI (`agy`, `TMUX_WEB_GEMINI_COMMAND`, default
+`^(?:agy|antigravity|gemini)$`) get the same treatment as Claude's, counted apart from it. The list mixes every kind of session;
+a card carries a **Claude** (clay) or **Gemini** (blue to violet) mark and a stripe of that color, and once the list holds more
+than one kind a segmented filter (**All · Claude · Gemini · Terminal**, with counts, remembered per browser) narrows it. A Gemini
+card shows its context (of a 1M window) and its spend at Google's API list prices (Neon $3/$15, cached $0.15 per million;
+Hydrogen half that; Argon $2/$10, doubling on 2026-12-01; 3.8 Flash $0.75/$3.75; thinking billed as output; anything unknown
+as Neon), without a share of a limit: agy's quota is behind a login kept in the system keyring, which is not read. The header
+pill adds Gemini's last two hours (✦), and the usage panel gets two tabs, **Claude** (limits and spend, as before) and
+**Gemini** (the same spend card: the last 7 days and conversations, the last 2 hours, tokens, the chart and list by
+conversation, input / cached input / response / thinking, models). The Read view shows a Gemini conversation in its own cool
+theme, with the message box, Working…/Stop and Screen & keys (no Send now, and none of Claude's commands in the commands menu).
+How it is read (gemini.mjs): agy keeps one SQLite database per conversation, `~/.gemini/antigravity-cli/conversations/<uuid>.db`
+(`TMUX_WEB_GEMINI_DIR`), steps as protobuf (the fields used are listed at the top of gemini.mjs); the pane's agy keeps
+`presence/<uuid>.lock` of its conversation open, which names it (failing that, agy's own last conversation per directory).
+Only finished steps become items, so the list only grows; a rewound conversation starts over under a new `file`. Spend is indexed
+like Claude's, every minute once wanted, in `TMUX_WEB_GEMINI_SPEND` (default `~/.local/state/tmux-web/gemini-spend.json`, numbers
+only); the model is a number in agy's records, mapped in gemini.mjs (`TMUX_WEB_GEMINI_MODELS` adds more as JSON). Uses
+`node:sqlite` (Node 22.5+), read-only. `GET /api/sessions` gives each session `agent: 'claude' | 'gemini' | null`; the
+transcript answers `agent` too; `GET /api/usage` adds `gemini: {ready, weekStart, week, recent, hours, halves, groups, kinds,
+models, tokens, conversations}` (null where agy has never run).
 The Read view's **Aa** button opens a row with **Size** (A−/A+ or the slider, 80–500 %, scales everything in the text including code and
 tool steps) and **Width** (Normal 760 px, Wide 1100 px, Full).
 Display preferences (terminal font, Read size and width, and the view a Claude session opens in) are remembered per person

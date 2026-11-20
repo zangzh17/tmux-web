@@ -12,6 +12,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { GEMINI_COMMAND, GEMINI_DIR, geminiPaneConversation, geminiTranscript, geminiContext, geminiConversationEvents, scanGeminiSpend, gspend, summaries as geminiSummaries } from './gemini.mjs';
 
 const SOCK = process.env.TMUX_WEB_API_SOCK
   || path.join(process.env.XDG_RUNTIME_DIR || os.tmpdir(), 'tmux-web', 'api.sock');
@@ -318,7 +319,9 @@ async function listSessions(user, specs, light) {
       sharedWithMe: shareOf(share).get(user.email) || null,
       preview: light ? [] : await peek(paneId),
       claude: CLAUDE_COMMAND.test(row.command), // what counts as Claude (TMUX_WEB_CLAUDE_COMMAND), so pages need not guess
-      ...(light || !CLAUDE_COMMAND.test(row.command) ? { context: null, spend: null } : await claudeFacts(paneId, panePid, cwd, maySeeUsage(user))),
+      agent: agentOf(row.command), // 'claude', 'gemini' (TMUX_WEB_GEMINI_COMMAND) or null: the list's filter and the cards' colors
+      ...(light || !agentOf(row.command) ? { context: null, spend: null }
+        : agentOf(row.command) === 'claude' ? await claudeFacts(paneId, panePid, cwd, maySeeUsage(user)) : await geminiFacts(panePid, cwd, maySeeUsage(user))),
     };
   }));
   return sessions.sort((a, b) => b.activity - a.activity);
@@ -791,6 +794,8 @@ async function shareSession(req, id, owner) {
 // ---- read-only views: plain scrollback, and the Claude Code conversation behind a pane
 const CLAUDE_COMMAND = new RegExp(process.env.TMUX_WEB_CLAUDE_COMMAND || 'claude', 'i');
 const CLAUDE_PROJECTS = process.env.TMUX_WEB_CLAUDE_PROJECTS || path.join(os.homedir(), '.claude', 'projects');
+// Which coding agent a pane runs, by its foreground command: Claude Code, or Gemini through the Antigravity CLI (gemini.mjs)
+const agentOf = (command) => (CLAUDE_COMMAND.test(command || '') ? 'claude' : GEMINI_COMMAND.test(command || '') ? 'gemini' : null);
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 const gone = { status: 404, body: { error: 'session not found' } };
 // What this person may do with session `id`: { access, owner }, or a 404 (a session they may not see does not exist for them).
@@ -1135,6 +1140,7 @@ async function sessionTranscript(id, query) {
     if (missingTarget(e)) return gone;
     throw e;
   }
+  if (agentOf(command) === 'gemini') return geminiSessionTranscript(id, session, cwd, pane, +panePid, { before, after, asked });
   if (!CLAUDE_COMMAND.test(command || '')) return { status: 404, body: { error: 'no Claude conversation in this session' } };
   const mine = await paneConversation(pane, +panePid);
   const file = mine ? await transcriptOf(mine.sessionId, mine.cwd || cwd) : await newestTranscript(cwd || '');
@@ -1157,8 +1163,40 @@ async function sessionTranscript(id, query) {
   let start, end;
   if (after !== undefined) { start = Math.min(after, total); end = Math.min(total, start + count); }
   else { end = Math.min(before ?? total, total); start = Math.max(0, end - count); }
-  return { status: 200, body: { id, session, file: path.basename(file, '.jsonl'), total, start, items: entry.items.slice(start, end),
+  return { status: 200, body: { id, session, agent: 'claude', file: path.basename(file, '.jsonl'), total, start, items: entry.items.slice(start, end),
     ...(await screenState(pane)) } };
+}
+const rangeOf = (total, { before, after, asked }) => {
+  const count = Math.min(500, Math.max(1, asked ?? (after === undefined ? 150 : 500)));
+  if (after !== undefined) { const start = Math.min(after, total); return [start, Math.min(total, start + count)]; }
+  const end = Math.min(before ?? total, total);
+  return [Math.max(0, end - count), end];
+};
+// The same answer for a Gemini pane (gemini.mjs): `file` is the conversation id with a generation (a rewound conversation is a
+// new list); busy and asking come from the conversation's own steps (one waiting for approval is a question), and from the
+// screen as for Claude. A pane with no conversation yet (agy started, nothing sent) is an empty conversation.
+const GEMINI_ASKING = /\b(?:Allow|Approve|Run this command)\b[\s\S]{0,400}\b(?:Deny|Reject|No)\b/;
+async function geminiSessionTranscript(id, session, cwd, pane, panePid, range) {
+  const conv = await geminiPaneConversation(panePid, cwd).catch(() => null);
+  const screen = await tmux(['capture-pane', '-p', '-t', pane]).catch(() => '');
+  const shown = { busy: SCREEN_BUSY.test(screen), asking: SCREEN_ASKING.test(screen) || GEMINI_ASKING.test(screen) };
+  if (!conv) return { status: 200, body: { id, session, agent: 'gemini', file: 'gemini-new', total: 0, start: 0, items: [], ...shown } };
+  let entry;
+  try { entry = await geminiTranscript(conv.id); } catch (e) {
+    if (e.code === 'ENOENT') return { status: 200, body: { id, session, agent: 'gemini', file: conv.id, total: 0, start: 0, items: [], ...shown } };
+    throw e;
+  }
+  const total = entry.items.length;
+  const [start, end] = rangeOf(total, range);
+  return { status: 200, body: { id, session, agent: 'gemini', file: `${conv.id}.${entry.gen}`, total, start, items: entry.items.slice(start, end),
+    busy: shown.busy || entry.busy, asking: shown.asking || entry.asking } };
+}
+// A Gemini pane's card: how full its conversation is and what it has cost at Google's API prices
+async function geminiFacts(panePid, cwd, withSpend) {
+  const conv = await geminiPaneConversation(panePid, cwd).catch(() => null);
+  if (!conv) return { context: null, spend: null };
+  const entry = await geminiTranscript(conv.id).catch(() => null);
+  return { context: geminiContext(entry), spend: withSpend ? await geminiCardSpend(conv.id).catch(() => null) : null };
 }
 async function screenState(pane) {
   const screen = await tmux(['capture-pane', '-p', '-t', pane]).catch(() => '');
@@ -1187,7 +1225,7 @@ function promptRows(screen) {
   const start = end > 0 ? lines.slice(0, end).findLastIndex((l) => PROMPT_RULE.test(l)) : -1;
   return start < 0 ? null : lines.slice(start + 1, end);
 }
-const promptHasText = (rows) => rows.join('\n').replace(/^\s*❯\s*/, '').replace(/^Try ".*"\s*$/s, '').trim() !== '';
+const promptHasText = (rows) => rows.join('\n').replace(/^\s*[❯>]\s*/, '').replace(/^Try ".*"\s*$/s, '').trim() !== '';
 async function clearPrompt(pane) {
   for (let attempt = 0; attempt < 3; attempt++) {
     const screen = await tmux(['capture-pane', '-p', '-t', pane]).catch(() => '');
@@ -1230,7 +1268,8 @@ async function sessionInput(req, id) {
     throw e;
   }
   if (live !== instance) return gone; // a reused ID must never receive input meant for an old tab
-  if (!CLAUDE_COMMAND.test(command || '') || !/^%\d+$/.test(pane || '')) return { status: 409, body: { error: 'no Claude in this pane' } };
+  if (!agentOf(command) || !/^%\d+$/.test(pane || '')) return { status: 409, body: { error: 'no Claude or Gemini in this pane' } };
+  if (key === 'SendNow' && agentOf(command) !== 'claude') return { status: 400, body: { error: 'key not allowed' } };
   await serialized(pane, async () => {
     if (message === undefined) { await tmux(['send-keys', '-t', pane, ...(key === 'SendNow' ? ['C-x', 'C-s'] : [key])]); return; }
     await clearPrompt(pane);
@@ -1463,7 +1502,8 @@ async function usageReport(user) {
   const last = samples.at(-1);
   return { status: 200, body: { now, at: last?.[0] ?? null, error: usage.error,
     fiveHour: last?.[1] != null ? { used: last[1], resetsAt: last[3] } : null,
-    sevenDay: last?.[2] != null ? { used: last[2], resetsAt: last[4] } : null, history, spend: await spendReport(user, last?.[4] ?? null) } };
+    sevenDay: last?.[2] != null ? { used: last[2], resetsAt: last[4] } : null, history, spend: await spendReport(user, last?.[4] ?? null),
+    gemini: await geminiSpendReport(user) } };
 }
 
 // ---- Claude spend: what this account's Claude conversations cost at API list prices, read from their own transcripts
@@ -1828,6 +1868,128 @@ async function spendReport(user, weekReset) {
     models: Object.fromEntries(Object.entries(models).map(([range, m]) => [range, [...m].sort((a, b) => b[1] - a[1]).map(([model, cost]) => ({ model, cost: r4(cost) }))])) };
 }
 
+
+// ---- Gemini spend (gemini.mjs indexes agy's conversations): counted apart from Claude's, since it is another account with its
+// own limits, which agy does not let us read. There is therefore no share of a limit, only dollars at Google's API list prices
+// and tokens. A card's numbers have the shape of Claude's (pct null). The panel's (GET /api/usage `gemini`): { ready, weekStart,
+// week, recent, hours, halves, groups, kinds: { input, read, output, thinking } by range, models by range, tokens by range,
+// conversations: how many ran in the last 7 days }, null when agy has never run here; groups as for Claude: open in a tmux session -> the session's name, else the
+// title agy gave it, untitled runs (`agy -p`) together per directory (a temporary directory's random part left out).
+let geminiWanted = false;
+const gsum = (ev) => ev[2] + ev[3] + ev[4] + ev[5];
+async function geminiCardSpend(id) {
+  geminiWanted = true;
+  const events = await geminiConversationEvents(id, SPEND_DAYS);
+  const now = Math.floor(Date.now() / 1000);
+  const step = 1800;
+  const spark = new Array(48).fill(0);
+  let total = 0;
+  let recent = 0;
+  let since = null;
+  for (const ev of events) {
+    const c = gsum(ev);
+    total += c;
+    if (ev[0] > now - SPEND_RECENT) recent += c;
+    since = since == null ? ev[0] : Math.min(since, ev[0]);
+    const i = 47 - Math.floor((now - ev[0]) / step);
+    if (i >= 0 && i < 48) spark[i] += c;
+  }
+  return { total: r4(total), recent: r4(recent), pct: null, since, step, spark: spark.map(r4), tokens: events.reduce((a, ev) => a + ev[6], 0) };
+}
+async function geminiSpendReport(user) {
+  if (!fs.existsSync(path.join(GEMINI_DIR, 'conversations'))) return null; // agy has never run in this account
+  geminiWanted = true;
+  if (!gspend.ready) {
+    scanGeminiSpend(SPEND_DAYS);
+    await Promise.race([gspend.scan, new Promise((resolve) => setTimeout(resolve, 1500))]);
+    if (!gspend.ready) return { ready: false };
+  } else if (!gspend.scan) await scanGeminiSpend(SPEND_DAYS);
+  const now = Math.floor(Date.now() / 1000);
+  const info = await geminiSummaries();
+  const live = new Map();
+  try {
+    for (const row of await listRows()) {
+      if (agentOf(row.command) !== 'gemini') continue;
+      const conv = await geminiPaneConversation(row.panePid, row.cwd).catch(() => null);
+      if (conv) live.set(conv.id, { name: row.name, visible: !!accessFor(user, row.owner, row.share) });
+    }
+  } catch { /* no tmux */ }
+  const seesAll = !multiUser() || user.admin || personal() || !!accessFor(user, '');
+  const weekStart = now - 7 * 86400;
+  const hourEnd = Math.ceil((now + 1) / 3600) * 3600;
+  const hours = { start: hourEnd - 172 * 3600, step: 3600, n: 172 };
+  const halves = { start: now - 48 * 1800, step: 1800, n: 48 };
+  const from = Math.min(hours.start, weekStart);
+  const rootOf = (id) => { let cur = id; for (let i = 0; i < 8 && info.get(cur)?.parent && info.has(info.get(cur).parent); i++) cur = info.get(cur).parent; return cur; };
+  const groups = new Map();
+  const kinds = { day: [0, 0, 0, 0], week: [0, 0, 0, 0] };
+  const tokens = { day: 0, week: 0 };
+  const models = { day: new Map(), week: new Map() };
+  let week = 0;
+  let recent = 0;
+  const conversations = new Set();
+  for (const [id, e] of gspend.dbs) {
+    const key = rootOf(id);
+    for (const ev of e.ev) {
+      if (ev[0] < from) continue;
+      const c = gsum(ev);
+      let g = groups.get(key);
+      if (!g) groups.set(key, g = { key, cost: 0, recent: 0, hours: new Array(hours.n).fill(0), halves: new Array(halves.n).fill(0) });
+      if (ev[0] >= weekStart) { week += c; conversations.add(key); }
+      if (ev[0] > now - SPEND_RECENT) { recent += c; g.recent += c; }
+      const h = Math.floor((ev[0] - hours.start) / 3600);
+      if (h >= 0 && h < hours.n) g.hours[h] += c;
+      const half = Math.floor((ev[0] - halves.start) / 1800);
+      if (half >= 0 && half < halves.n) g.halves[half] += c;
+      if (ev[0] > now - 7 * 86400) g.cost += c;
+      for (const [range, span] of [['day', 86400], ['week', 7 * 86400]]) {
+        if (ev[0] <= now - span) continue;
+        for (let k = 0; k < 4; k++) kinds[range][k] += ev[2 + k];
+        tokens[range] += ev[6];
+        const model = gspend.models[ev[1]];
+        models[range].set(model, (models[range].get(model) || 0) + c);
+      }
+    }
+  }
+  const home = os.homedir();
+  const merged = new Map();
+  for (const g of groups.values()) {
+    const s = info.get(g.key) || {};
+    const open = live.get(g.key);
+    const cwd = s.cwd || '';
+    // a temporary directory (mkdtemp's 8 random characters under /tmp) counts as one directory, e.g. /tmp/score-gemini-call-*/work
+    const key = open || s.title ? g.key : `dir:${/^\/(?:var\/)?tmp\//.test(cwd) ? cwd.replace(/-[A-Za-z0-9_]{8}(?=\/|$)/g, '-*') : cwd}`;
+    const m = merged.get(key);
+    if (!m) { merged.set(key, { ...g, title: s.title || '', preview: s.preview || '', cwd: key.startsWith('dir:') ? key.slice(4) : cwd, open, runs: 1 }); continue; }
+    m.runs++;
+    m.cost += g.cost;
+    m.recent += g.recent;
+    g.hours.forEach((v, i) => { m.hours[i] += v; });
+    g.halves.forEach((v, i) => { m.halves[i] += v; });
+  }
+  const named = [];
+  const rest = { label: '', sub: '', live: false, rest: 0, cost: 0, recent: 0, hours: new Array(hours.n).fill(0), halves: new Array(halves.n).fill(0) };
+  for (const g of [...merged.values()].sort((a, b) => b.cost - a.cost || b.recent - a.recent)) {
+    const where = g.cwd === home ? '~' : g.cwd.startsWith(`${home}/`) ? `~${g.cwd.slice(home.length)}` : g.cwd;
+    if (!(g.open ? g.open.visible : seesAll) || named.length >= 24) {
+      rest.rest += g.runs;
+      rest.cost += g.cost;
+      rest.recent += g.recent;
+      g.hours.forEach((v, i) => { rest.hours[i] += v; });
+      g.halves.forEach((v, i) => { rest.halves[i] += v; });
+      continue;
+    }
+    // a short first message names an untitled conversation; a long prompt (`agy -p "You are worker …"`) only describes it
+    const short = g.runs === 1 && g.preview && g.preview.length <= 48 ? g.preview : '';
+    const label = g.open ? g.open.name : g.title || short || path.basename(g.cwd) || 'Gemini';
+    const sub = g.open ? g.title || g.preview || where : g.title || short ? where : `${where}${g.runs > 1 ? ` · ${g.runs} conversations` : g.preview ? ` · ${g.preview}` : ''}`;
+    named.push({ label, sub, live: !!g.open, cost: r4(g.cost), recent: r4(g.recent), hours: g.hours.map(r4), halves: g.halves.map(r4) });
+  }
+  if (rest.rest) named.push({ ...rest, cost: r4(rest.cost), recent: r4(rest.recent), hours: rest.hours.map(r4), halves: rest.halves.map(r4) });
+  return { ready: true, weekStart, week: r4(week), recent: r4(recent), hours, halves, groups: named, conversations: conversations.size, tokens,
+    kinds: Object.fromEntries(Object.entries(kinds).map(([range, k]) => [range, { input: r4(k[0]), read: r4(k[1]), output: r4(k[2]), thinking: r4(k[3]) }])),
+    models: Object.fromEntries(Object.entries(models).map(([range, m]) => [range, [...m].sort((a, b) => b[1] - a[1]).map(([model, cost]) => ({ model, cost: r4(cost) }))])) };
+}
 // ---- HTTP
 function send(res, status, body, type = 'text/plain; charset=utf-8') {
   res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
@@ -1916,7 +2078,7 @@ const server = http.createServer(async (req, res) => {
 sweepUploads();
 setInterval(sweepUploads, 3600_000).unref();
 setTimeout(pollUsage, 3000).unref();
-setInterval(() => { if (spend.wanted) scanSpend(); }, SPEND_EVERY).unref(); // started by the first request that wants it
+setInterval(() => { if (spend.wanted) scanSpend(); if (geminiWanted) scanGeminiSpend(SPEND_DAYS); }, SPEND_EVERY).unref(); // started by the first request that wants it
 setInterval(pollUsage, USAGE_EVERY).unref();
 setInterval(sweepScratch, Math.min(60_000, SCRATCH_IDLE * 500)).unref();
 fs.mkdirSync(path.dirname(SOCK), { recursive: true, mode: 0o700 });

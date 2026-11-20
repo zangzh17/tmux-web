@@ -8,7 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <title>Tmux sessions</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="app.css?v=20261109-spend">
+<link rel="stylesheet" href="app.css?v=20261120-gemini">
 </head>
 <body>
 <main>
@@ -21,8 +21,9 @@
     <button class="usage-pill" id="usage-pill" type="button" aria-expanded="false" aria-controls="usage-panel" hidden></button>
     <button class="icon-btn" id="refresh" type="button" aria-label="Refresh sessions" title="Refresh sessions">⟳</button>
   </header>
-  <section class="usage-panel" id="usage-panel" aria-label="Claude usage" hidden>
+  <section class="usage-panel" id="usage-panel" aria-label="Usage of Claude and Gemini" hidden>
     <div class="usage-inner">
+      <div class="usage-tabs" id="usage-tabs" role="tablist" aria-label="Whose usage" hidden></div>
       <div class="usage-grid" id="usage-grid"></div>
       <article class="sp-card" id="spend-card" aria-labelledby="spend-title" hidden></article>
       <p class="usage-note" id="usage-note"></p>
@@ -50,6 +51,7 @@
     <div class="owner-filter" id="owner-filter" hidden>
       <div class="chips" id="owner-options" role="group" aria-label="Show sessions from"></div>
     </div>
+    <div class="seg kind-filter" id="kind-filter" role="group" aria-label="Show sessions running" hidden></div>
     <div class="preview-step" role="group" aria-label="Preview lines">
       <button type="button" id="preview-less" aria-label="Fewer preview lines" title="Fewer preview lines">−</button>
       <button type="button" id="preview-toggle"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h8"/></svg><span id="preview-value">7</span></button>
@@ -91,6 +93,6 @@
     <button id="close-confirm" class="confirm" type="button">Close session</button>
   </div>
 </dialog>
-<script src="index.js?v=20261109-usage-who"></script>
+<script src="index.js?v=20261120-gemini"></script>
 </body>
 </html>

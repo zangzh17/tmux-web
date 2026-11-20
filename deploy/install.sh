@@ -8,7 +8,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 [ -w /opt/tmux-web ] && [ -w /etc/tmux-web/accounts ] || { echo "run sudo deploy/setup-root.sh first" >&2; exit 1; }
 
-rsync -a --delete --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r "$here"/server.mjs "$here"/Caddyfile "$here"/public /opt/tmux-web/
+rsync -a --delete --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r "$here"/server.mjs "$here"/gemini.mjs "$here"/Caddyfile "$here"/public /opt/tmux-web/
 rsync -a --delete --chmod=Du=rwx,Dgo=rx,Fu=rwx,Fgo=rx "$here"/bin /opt/tmux-web/
 
 for f in env users.json; do

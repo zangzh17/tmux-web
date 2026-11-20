@@ -85,9 +85,29 @@
   // a share of the weekly limit: ≈0.4%, ≈3.7%, ≈21%
   const weekPct = (p) => `≈${p > 0 && p < 0.1 ? '<0.1' : p < 9.95 ? String(Math.round(p * 10) / 10) : String(Math.round(p))}%`;
 
-  // A Claude session's spend: its conversation's total and the last two hours, each with the share of the weekly limit it comes
-  // to, and a sparkline of its last 24 hours in half hours (the last four, i.e. the last two hours, in full color).
-  function spendStrip(sp, now) {
+  // The coding agents a session can run (api/sessions `agent`): each has its color (--claude, --gemini) and mark on the cards,
+  // the list's filter and the usage panel; a session running neither is a plain terminal.
+  const AGENTS = { claude: { label: 'Claude', glyph: '✻' }, gemini: { label: 'Gemini', glyph: '✦' } };
+  const KINDS = [
+    { key: 'all', label: 'All' },
+    { key: 'claude', label: 'Claude', glyph: '✻' },
+    { key: 'gemini', label: 'Gemini', glyph: '✦' },
+    { key: 'shell', label: 'Terminal', glyph: '›' },
+  ];
+  const kindOf = (s) => s.agent || (s.claude ? 'claude' : 'shell');
+  let kindFilter = 'all';
+  try { const saved = localStorage.getItem('tmuxweb.kind'); if (KINDS.some((k) => k.key === saved)) kindFilter = saved; } catch { /* private mode */ }
+  function agentTag(agent) {
+    const a = AGENTS[agent];
+    const tag = el('span', `agent-tag ${agent}`);
+    tag.append(el('span', 'agent-glyph', a.glyph), document.createTextNode(a.label));
+    return tag;
+  }
+
+  // An agent session's spend: its conversation's total and the last two hours (for Claude each with the share of the weekly
+  // limit it comes to; Gemini's limits cannot be read), and a sparkline of its last 24 hours in half hours (the last four, i.e.
+  // the last two hours, in full color).
+  function spendStrip(sp, now, agent = 'claude') {
     const box = el('div', 'spend');
     const stat = (value, label, pct, hot) => {
       const node = el('span', `sp-stat${hot ? ' hot' : ''}`);
@@ -98,7 +118,7 @@
     const stats = el('div', 'sp-stats');
     stats.append(stat(sp.total, 'total', sp.pct?.[0]), stat(sp.recent, 'last 2 h', sp.pct?.[1], true));
     const share = (p) => (p != null ? `, ${weekPct(p)} of the weekly limit` : '');
-    box.title = `Claude spend at API prices. This conversation: ${money(sp.total)}${share(sp.pct?.[0])}${sp.since ? ` since ${clock(sp.since, true)}` : ''}. Last 2 hours: ${money(sp.recent)}${share(sp.pct?.[1])}.`;
+    box.title = `${agent === 'gemini' ? 'Gemini spend at Google’s API prices' : 'Claude spend at API prices'}. This conversation: ${money(sp.total)}${share(sp.pct?.[0])}${sp.tokens ? ` (${tokens(sp.tokens)} tokens)` : ''}${sp.since ? ` since ${clock(sp.since, true)}` : ''}. Last 2 hours: ${money(sp.recent)}${share(sp.pct?.[1])}.`;
     box.append(stats, sparkline(sp, now));
     return box;
   }
@@ -125,7 +145,8 @@
   }
 
   // How full a Claude session's conversation is: a small bar, amber from half, red from 80%. Just compacted: not known yet.
-  function contextMeter({ tokens: used, window, compacted }) {
+  function contextMeter({ tokens: used, window, compacted }, agent = 'claude') {
+    const who = AGENTS[agent]?.label || 'Claude';
     if (compacted) {
       const meter = el('span', 'ctx compacted', 'ctx compacted');
       meter.prepend(el('span', 'ctx-bar'));
@@ -134,9 +155,9 @@
     }
     const pct = Math.min(100, Math.round((used / window) * 100));
     const meter = el('span', `ctx${pct >= 80 ? ' bad' : pct >= 50 ? ' warn' : ''}`);
-    meter.title = `Claude context: ${tokens(used)} of ${tokens(window)} tokens (${pct}%)`;
+    meter.title = `${who} context: ${tokens(used)} of ${tokens(window)} tokens (${pct}%)`;
     meter.setAttribute('role', 'meter');
-    meter.setAttribute('aria-label', 'Claude context used');
+    meter.setAttribute('aria-label', `${who} context used`);
     meter.setAttribute('aria-valuemin', '0');
     meter.setAttribute('aria-valuemax', '100');
     meter.setAttribute('aria-valuenow', String(pct));
@@ -167,12 +188,14 @@
   }
 
   function card(s, now) {
-    const a = el('a', 'card');
+    const kind = kindOf(s);
+    const a = el('a', `card kind-${kind}`);
     a.href = `term.html?s=${encodeURIComponent(s.name)}&id=${encodeURIComponent(s.id)}&instance=${encodeURIComponent(s.instance)}`;
     const row = el('div', 'row');
     row.append(el('span', 'name', s.name));
     const meta = el('div', 'meta');
-    if (s.context) meta.append(contextMeter(s.context));
+    if (AGENTS[kind]) meta.append(agentTag(kind));
+    if (s.context) meta.append(contextMeter(s.context, kind));
     meta.append(...ownerTag(s));
     meta.append(el('span', null, `${s.windows} ${s.windows === 1 ? 'window' : 'windows'}`));
     meta.append(s.attached > 0 ? el('span', 'badge-on', `● Attached ×${s.attached}`) : el('span', null, 'Detached'));
@@ -180,7 +203,7 @@
     const where = el('div', 'where');
     where.append(el('b', null, s.command), document.createTextNode(` · ${s.path}`));
     a.append(row, meta, where);
-    if (s.spend) a.append(spendStrip(s.spend, now));
+    if (s.spend) a.append(spendStrip(s.spend, now, kind));
     if (previewLines && s.preview && s.preview.length) {
       const preview = el('pre', `peek${s.preview.length > previewLines ? ' cut' : ''}`);
       for (const line of s.preview.slice(-previewLines)) preview.append(el('span', 'peek-line', line));
@@ -237,10 +260,11 @@
 
   function render(data) {
     latestData = data;
-    const json = JSON.stringify({ data, previewLines, who: me?.email, sharePeople: me?.sharePeople });
+    const json = JSON.stringify({ data, previewLines, kindFilter, who: me?.email, sharePeople: me?.sharePeople });
     if (json === lastJson) return;
     lastJson = json;
     $listTitle.textContent = data.sessions.length ? `${data.sessions.length} ${data.sessions.length === 1 ? 'session' : 'sessions'}` : 'Sessions';
+    renderKinds(data.sessions);
     $list.replaceChildren();
     if (!data.sessions.length) {
       const li = el('li', 'empty');
@@ -248,7 +272,44 @@
       $list.append(li);
       return;
     }
-    for (const s of data.sessions) $list.append(card(s, data.now));
+    const shown = data.sessions.filter((s) => kindFilter === 'all' || kindOf(s) === kindFilter);
+    if (!shown.length) {
+      const li = el('li', 'empty');
+      const all = el('button', 'link-btn', 'Show all sessions');
+      all.type = 'button';
+      all.addEventListener('click', () => setKind('all'));
+      li.append(document.createTextNode(`No ${{ claude: 'Claude', gemini: 'Gemini', shell: 'plain terminal' }[kindFilter]} sessions right now. `), all);
+      $list.append(li);
+      return;
+    }
+    for (const s of shown) $list.append(card(s, data.now));
+  }
+
+  // ---- what kind of session to list: all, Claude, Gemini or plain terminals (a segmented control with counts, remembered in
+  // this browser). Shown once the list holds more than one kind; a kind with nothing in it is left out unless it is the choice.
+  const $kindFilter = document.getElementById('kind-filter');
+  function setKind(key) {
+    kindFilter = key;
+    try { localStorage.setItem('tmuxweb.kind', key); } catch { /* private mode */ }
+    if (latestData) render(latestData);
+  }
+  function renderKinds(sessions) {
+    const count = { all: sessions.length, claude: 0, gemini: 0, shell: 0 };
+    for (const s of sessions) count[kindOf(s)]++;
+    const kinds = ['claude', 'gemini', 'shell'].filter((k) => count[k] > 0).length;
+    $kindFilter.hidden = kinds < 2 && kindFilter === 'all';
+    $listTitle.classList.toggle('with-kinds', !$kindFilter.hidden);
+    if ($kindFilter.hidden) { $kindFilter.replaceChildren(); return; }
+    $kindFilter.replaceChildren(...KINDS.filter((k) => k.key === 'all' || count[k.key] > 0 || k.key === kindFilter).map((k) => {
+      const b = el('button', `kind-${k.key}`);
+      b.type = 'button';
+      if (k.glyph) b.append(el('span', 'kind-glyph', k.glyph));
+      b.append(document.createTextNode(k.label), el('span', 'count', String(count[k.key])));
+      b.setAttribute('aria-pressed', String(kindFilter === k.key));
+      b.title = k.key === 'all' ? 'Every session' : k.key === 'shell' ? 'Sessions running neither Claude nor Gemini' : `Sessions running ${k.label}`;
+      b.addEventListener('click', () => setKind(kindFilter === k.key && k.key !== 'all' ? 'all' : k.key));
+      return b;
+    }));
   }
 
   function saveSelection() {
@@ -538,9 +599,15 @@
     parts.pillSpendNum = el('b', null, '$0');
     parts.pillSpend.append(parts.pillSpendNum, el('span', 'gauge-label', '2 h'));
     parts.pillSpend.hidden = true;
+    parts.pillGemini = el('span', 'pill-spend gemini');
+    parts.pillGeminiNum = el('b', null, '$0');
+    const gLabel = el('span', 'gauge-label');
+    gLabel.append(el('span', 'agent-glyph', '✦'), document.createTextNode('2 h'));
+    parts.pillGemini.append(parts.pillGeminiNum, gLabel);
+    parts.pillGemini.hidden = true;
     const chev = svgEl('svg', { class: 'usage-chev', viewBox: '0 0 12 12', 'aria-hidden': 'true' });
     chev.append(svgEl('path', { d: 'M3 4.5 6 7.5 9 4.5' }));
-    $usagePill.append(parts.pillSpend, chev);
+    $usagePill.append(parts.pillSpend, parts.pillGemini, chev);
   }
 
   // One window: x is its time from start to reset, y the share used. A window that has ended since the last answer is a new one
@@ -606,14 +673,15 @@
   function labelUsage() {
     const said = LIMITS.filter((lim) => !parts[lim.key].gauge.hidden).map((lim) => `${lim.name}: ${parts[lim.key].num.dataset.value}% left`);
     if (!parts.pillSpend.hidden) said.push(`last 2 hours: ${money(usage.spend.recent)} at API prices`);
-    $usagePill.title = `Claude usage. ${said.join(', ')}`;
+    const gemini = !parts.pillGemini.hidden ? ` Gemini: ${money(usage.gemini.recent)} in the last 2 hours at Google’s API prices.` : '';
+    $usagePill.title = `Claude usage. ${said.join(', ')}.${gemini}`;
     $usagePill.setAttribute('aria-label', `${$usagePill.title}. ${usageOpen ? 'Hide' : 'Show'} the trend`);
   }
   $usagePill.addEventListener('click', () => setUsageOpen(!usageOpen, true));
 
   function renderUsage() {
     const limits = usage?.at != null && LIMITS.some((lim) => usage[lim.key]);
-    const shown = limits || !!usage?.spend?.ready;
+    const shown = limits || !!usage?.spend?.ready || !!usage?.gemini?.ready;
     $usagePill.hidden = $usagePanel.hidden = !shown;
     if (!shown) return;
     const fresh = !$usagePill.childElementCount;
@@ -641,6 +709,14 @@
       parts.pillSpendNum.textContent = moneyShort(usage.spend.recent);
       parts.pillSpend.classList.toggle('alone', !limits);
     }
+    // Gemini's part of the pill once it has been used this week (and its tab in the panel whenever agy is here at all)
+    const geminiUsed = !!usage.gemini?.ready && (usage.gemini.week > 0 || usage.gemini.recent > 0);
+    parts.pillGemini.hidden = !geminiUsed;
+    if (geminiUsed) {
+      parts.pillGeminiNum.textContent = moneyShort(usage.gemini.recent);
+      parts.pillGemini.classList.toggle('alone', !limits && parts.pillSpend.hidden);
+    }
+    renderTabs();
     renderSpend();
     if (usageOpen === null) {
       let saved = null;
@@ -648,6 +724,56 @@
       requestAnimationFrame(() => setUsageOpen(saved === null ? usageKind() === 'desktop' : saved === '1', false));
     } else labelUsage();
   }
+
+  // ---- the panel's two accounts, counted apart: Claude (its limits and its spend) and Gemini (its spend; agy's quota cannot be
+  // read). Tabs at the top when there is a Gemini part at all; the choice is remembered in this browser.
+  const $usageTabs = document.getElementById('usage-tabs');
+  let provider = 'claude';
+  try { if (localStorage.getItem('tmuxweb.usageTab') === 'gemini') provider = 'gemini'; } catch { /* private mode */ }
+  const tabParts = {};
+  function renderTabs() {
+    const gemini = usage?.gemini;
+    $usageTabs.hidden = !gemini;
+    if (!gemini && provider === 'gemini') provider = 'claude';
+    if (!tabParts.claude) {
+      for (const key of ['claude', 'gemini']) {
+        const b = el('button', `usage-tab ${key}`);
+        b.type = 'button';
+        b.setAttribute('role', 'tab');
+        const name = el('span', 'usage-tab-name');
+        name.append(el('span', 'agent-glyph', AGENTS[key].glyph), document.createTextNode(AGENTS[key].label));
+        const sub = el('span', 'usage-tab-sub');
+        b.append(name, sub);
+        b.addEventListener('click', () => {
+          if (provider === key) return;
+          provider = key;
+          try { localStorage.setItem('tmuxweb.usageTab', key); } catch { /* private mode */ }
+          hoverAt = -1;
+          renderTabs();
+          renderSpend();
+          for (const card of [...LIMITS.map((lim) => parts[lim.key]?.card).filter(Boolean), $spendCard]) { card.classList.remove('draw'); void card.offsetWidth; card.classList.add('draw'); }
+        });
+        tabParts[key] = { b, sub };
+        $usageTabs.append(b);
+      }
+    }
+    const claudeLeft = LIMITS.filter((lim) => usage?.[lim.key]).map((lim) => `${parts[lim.key]?.num.dataset.value ?? '–'}% ${lim.short}`).join(' · ');
+    tabParts.claude.sub.textContent = [claudeLeft && `${claudeLeft} left`, usage?.spend?.ready ? `${moneyShort(usage.spend.week)} wk` : ''].filter(Boolean).join(' · ') || 'limits and spend';
+    tabParts.gemini.sub.textContent = gemini?.ready ? `${moneyShort(gemini.week)} · 7 d` : gemini ? 'reading…' : '';
+    for (const key of ['claude', 'gemini']) {
+      tabParts[key].b.setAttribute('aria-selected', String(provider === key));
+      tabParts[key].b.tabIndex = provider === key ? 0 : -1;
+    }
+    $usagePanel.dataset.provider = provider;
+    $usageGrid.hidden = provider !== 'claude';
+  }
+  $usageTabs?.addEventListener('keydown', (e) => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(e.key) || $usageTabs.hidden) return;
+    e.preventDefault();
+    tabParts[provider === 'claude' ? 'gemini' : 'claude'].b.click();
+    tabParts[provider].b.focus();
+  });
+  const spendData = () => (provider === 'gemini' ? usage?.gemini : usage?.spend);
 
   let spendRetry = null;
   async function loadUsage() {
@@ -661,7 +787,7 @@
     renderUsage();
     // the first reading of the transcripts takes a few seconds: ask again soon rather than in a minute
     clearTimeout(spendRetry);
-    if (usage?.spend && !usage.spend.ready && !document.hidden) spendRetry = setTimeout(loadUsage, 3000);
+    if (((usage?.spend && !usage.spend.ready) || (usage?.gemini && !usage.gemini.ready)) && !document.hidden) spendRetry = setTimeout(loadUsage, 3000);
   }
 
   // ---- what Claude cost at API prices (api/usage `spend`): the week so far and the last two hours, each as a share of the weekly
@@ -675,9 +801,14 @@
   const sp = {}; // the card's parts, built once
   let chart = null; // what the plot shows, for the hover layer
   let hoverAt = -1;
+  const cap = (w) => `${w[0].toUpperCase()}${w.slice(1)}`;
   const modelName = (m) => {
     const x = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(m);
-    return x ? `${x[1][0].toUpperCase()}${x[1].slice(1)} ${x[2]}${x[3] ? `.${x[3]}` : ''}` : m;
+    if (x) return `${cap(x[1])} ${x[2]}${x[3] ? `.${x[3]}` : ''}`;
+    const g = /^gemini-(\d+(?:\.\d+)?)-([a-z]+(?:-lite)?)-(low|medium|high|xhigh)$/.exec(m); // gemini-4-neon-high: Neon 4 · high
+    if (g) return `${cap(g[2])} ${g[1]} · ${g[3]}`;
+    const n = /^gemini-model-(\d+)$/.exec(m);
+    return n ? `Gemini #${n[1]}` : m;
   };
   const niceCeil = (v) => {
     if (!(v > 0)) return 1;
@@ -691,7 +822,8 @@
     const head = el('div', 'sp-head');
     const title = el('h3', null, 'Spend');
     title.id = 'spend-title';
-    title.append(el('small', null, 'at API prices'));
+    sp.titleSmall = el('small', null, 'at API prices');
+    title.append(sp.titleSmall);
     sp.seg = el('div', 'seg');
     sp.seg.setAttribute('role', 'group');
     sp.seg.setAttribute('aria-label', 'Range');
@@ -922,6 +1054,7 @@
   }
 
   function drawTiles(s) {
+    if (provider === 'gemini') { drawGeminiTiles(s); return; }
     const rate = s.rate;
     const tile = (label, value, sub, cls) => {
       const t = el('div', `tile${cls ? ` ${cls}` : ''}`);
@@ -936,6 +1069,23 @@
       tile('This week', money(s.week), [...share(s.pct?.[0]), `${s.pct ? ' · ' : ''}since ${shortWhen(s.weekStart)}`]),
       tile('Last 2 hours', money(s.recent), share(s.pct?.[1]).length ? share(s.pct?.[1]) : ['at API prices'], 'hot'),
       tile('1% of the week', rate ? `≈ ${money(1 / rate.perDollar)}` : '—', [rate ? `measured over ${days} day${days === 1 ? '' : 's'}` : 'needs more usage history'], 'rate'),
+    );
+  }
+
+  // Gemini has no limit to measure against: the week's money and conversations, the last two hours, and the tokens.
+  function drawGeminiTiles(s) {
+    const tile = (label, value, sub, cls) => {
+      const t = el('div', `tile${cls ? ` ${cls}` : ''}`);
+      const subNode = el('span', 'tile-sub');
+      subNode.append(...sub);
+      t.append(el('span', 'tile-label', label), el('b', 'tile-val', value), subNode);
+      return t;
+    };
+    const n = s.conversations;
+    sp.tiles.replaceChildren(
+      tile('Last 7 days', money(s.week), [el('b', null, String(n)), ` conversation${n === 1 ? '' : 's'}`]),
+      tile('Last 2 hours', money(s.recent), ['at API prices'], 'hot'),
+      tile(`Tokens · ${RANGES[spendRange].short}`, tokens(s.tokens[spendRange]), ['input, cached and output'], 'rate'),
     );
   }
 
@@ -986,30 +1136,38 @@
   }
 
   function renderSpend() {
-    const s = usage?.spend;
+    const s = spendData();
     $spendCard.hidden = !s;
     if (!s) return;
     if (!sp.seg) buildSpend();
+    const gemini = provider === 'gemini';
+    $spendCard.dataset.provider = provider;
+    sp.titleSmall.textContent = gemini ? 'at Google’s API prices' : 'at API prices';
     for (const b of sp.seg.children) b.setAttribute('aria-pressed', String(b.dataset.range === spendRange));
     $spendCard.classList.toggle('wait', !s.ready);
     if (!s.ready) {
       if (!sp.view) {
         sp.tiles.replaceChildren();
         sp.empty.hidden = false;
-        sp.empty.textContent = 'Reading Claude’s transcripts…';
+        sp.empty.textContent = gemini ? 'Reading Gemini’s conversations…' : 'Reading Claude’s transcripts…';
       }
-      sp.note.textContent = 'Counting what Claude’s conversations on this machine cost; the first time takes a few seconds.';
+      sp.note.textContent = `Counting what ${gemini ? 'Gemini’s' : 'Claude’s'} conversations on this machine cost; the first time takes a few seconds.`;
       return;
     }
     drawTiles(s);
     sp.view = spendView(s);
     drawChart();
     drawList(sp.view, s);
-    const KINDS = [['read', 'Cache reads'], ['write', 'Cache writes'], ['output', 'Output'], ['input', 'Input']];
+    const TOKEN_KINDS = gemini ? [['read', 'Cached input'], ['input', 'Input'], ['output', 'Response'], ['thinking', 'Thinking']]
+      : [['read', 'Cache reads'], ['write', 'Cache writes'], ['output', 'Output'], ['input', 'Input']];
     sp.mix.replaceChildren(
-      mixPart(`Tokens · ${RANGES[spendRange].long}`, KINDS.map(([k, name]) => ({ name, value: s.kinds[spendRange][k] }))),
+      mixPart(`Tokens · ${RANGES[spendRange].long}`, TOKEN_KINDS.map(([k, name]) => ({ name, value: s.kinds[spendRange][k] }))),
       mixPart(`Models · ${RANGES[spendRange].long}`, s.models[spendRange].map((m) => ({ name: modelName(m.model), value: m.cost }))),
     );
+    if (gemini) {
+      sp.note.textContent = 'What the same tokens would cost on Google’s Gemini API at list prices (thinking billed as output), from every generation in the Antigravity CLI’s (agy) conversations on this machine, subagents included. Counted apart from Claude; agy’s own quota cannot be read here, so there is no share of a limit.';
+      return;
+    }
     const rate = s.rate;
     sp.note.textContent = `What the same tokens would cost on the API, from each answer in the transcripts of Claude Code on this machine (subagents included). ${rate
       ? `Share of the week: the weekly limit rose ${rate.pct}% while ${money(rate.cost)} was spent here since ${new Date(rate.from * 1000).toLocaleDateString([], { month: 'short', day: 'numeric' })}; use of this Claude login elsewhere (claude.ai, another computer) makes the shares read a little high.`

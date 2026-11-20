@@ -6,6 +6,7 @@
   /* spend charts: five categorical slots in a fixed order (CVD-checked against this surface) and "the rest"; a blue ramp for parts of a whole */
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s0: #b3b9c4;
   --q1: #1c5cab; --q2: #3987e5; --q3: #86b6ef; --q4: #c4dbf8;
+  --claude: #c2603d; --gemini: #2f6fe4; --gemini2: #8a5cf5; /* the two coding agents: Claude's clay, Gemini's blue to violet */
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -14,6 +15,7 @@
     --good: #4ade80; --warn: #fbbf24; --bad: #ff6b81;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s0: #4a5263;
     --q1: #b7d3f6; --q2: #6da7ec; --q3: #2a78d6; --q4: #1c4f8f;
+    --claude: #e3876a; --gemini: #6fa2ff; --gemini2: #b394ff;
   }
   .create button { color: #0b0e14; }
 }
@@ -56,7 +58,7 @@ h1 { margin: 0; font-size: 1.25rem; line-height: 1.25; letter-spacing: -0.01em; 
 .preview-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
 .preview-label { font-size: 0.9rem; font-weight: 650; }
 /* the bar above the list: whose sessions (chips that scroll sideways on a phone) and how many preview lines (− n +) */
-.list-bar { display: flex; align-items: center; gap: 8px; min-height: 34px; margin: 0 0 10px; }
+.list-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 34px; margin: 0 0 10px; }
 .list-title { color: var(--muted); font-size: 0.75rem; font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase; }
 .owner-filter { flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 16px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 16px), transparent); }
 .owner-filter::-webkit-scrollbar { display: none; }
@@ -360,3 +362,43 @@ body.off #create, body.off #list-bar, body.off #list, body.off .foot, body.off #
   .seg button { height: 32px; min-width: 52px; }
 }
 
+
+/* ---- Claude and Gemini: a mark and a stripe of the agent's color on its cards (its context bar and spend take the color too),
+   the list's filter by kind, and the usage panel's two tabs */
+.card.kind-claude { --accent: var(--claude); --ag: var(--claude); }
+.card.kind-gemini { --accent: var(--gemini); --ag: var(--gemini); }
+.card.kind-claude, .card.kind-gemini { position: relative; overflow: hidden; }
+.card.kind-claude::before, .card.kind-gemini::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--ag); }
+.card.kind-gemini::before { background: linear-gradient(180deg, var(--gemini), var(--gemini2)); }
+.agent-tag { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--ag) 13%, transparent); color: var(--ag); font-size: 0.75rem; font-weight: 680; letter-spacing: 0.01em; }
+.agent-tag.claude { --ag: var(--claude); }
+.agent-tag.gemini { --ag: var(--gemini); background: linear-gradient(90deg, color-mix(in srgb, var(--gemini) 14%, transparent), color-mix(in srgb, var(--gemini2) 14%, transparent)); }
+.agent-glyph { display: inline-block; font-size: 0.95em; line-height: 1; }
+.gemini .agent-glyph, .kind-gemini .kind-glyph { background: linear-gradient(135deg, var(--gemini), var(--gemini2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.claude .agent-glyph, .kind-claude .kind-glyph { color: var(--claude); }
+.kind-filter { flex: none; }
+.kind-filter button { display: inline-flex; align-items: center; gap: 5px; min-width: 0; padding: 0 11px; white-space: nowrap; }
+.kind-filter .count { color: var(--muted); font-size: 0.7rem; font-weight: 550; font-variant-numeric: tabular-nums; }
+.kind-filter .kind-glyph { font-size: 0.9rem; line-height: 1; }
+.kind-filter .kind-shell .kind-glyph { color: var(--muted); font-weight: 700; }
+.kind-filter button.kind-claude[aria-pressed="true"] { box-shadow: 0 1px 3px rgb(16 24 40 / 14%), inset 0 -2px 0 var(--claude); }
+.kind-filter button.kind-gemini[aria-pressed="true"] { box-shadow: 0 1px 3px rgb(16 24 40 / 14%), inset 0 -2px 0 var(--gemini); }
+@media (min-width: 601px) { .list-title.with-kinds { display: none; } } /* on a phone the filter has a row of its own, the count stays */
+@media (max-width: 600px) {
+  .kind-filter { order: 3; flex: 1 1 100%; overflow-x: auto; scrollbar-width: none; }
+  .kind-filter::-webkit-scrollbar { display: none; }
+  .kind-filter button { flex: 1 0 auto; justify-content: center; }
+}
+.link-btn { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
+.usage-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; margin: 2px 0 10px; padding: 3px; border: 1px solid var(--border); border-radius: 14px; background: var(--peek-bg); }
+.usage-tab { --ag: var(--claude); display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; padding: 7px 12px 8px; border: 0; border-radius: 11px; background: none; color: var(--muted); font: inherit; text-align: left; cursor: pointer; touch-action: manipulation; transition: background 0.2s, color 0.2s, box-shadow 0.2s; }
+.usage-tab.gemini { --ag: var(--gemini); }
+.usage-tab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgb(16 24 40 / 14%), inset 0 -2px 0 var(--ag); }
+.usage-tab:focus-visible { outline: 2px solid var(--ag); outline-offset: 1px; }
+.usage-tab-name { display: inline-flex; align-items: center; gap: 6px; font-size: 0.88rem; font-weight: 680; }
+.usage-tab-sub { max-width: 100%; overflow: hidden; color: var(--muted); font-size: 0.72rem; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.usage-panel[data-provider="gemini"] .sp-card { margin-top: 0; }
+.sp-card[data-provider="gemini"] { --accent: var(--gemini); }
+.pill-spend.gemini .gauge-label { display: inline-flex; align-items: center; gap: 3px; }
+.pill-spend.gemini .agent-glyph { font-size: 0.75rem; letter-spacing: 0; }
+@media (max-width: 420px) { .pill-spend.gemini:not(.alone) { display: none; } }

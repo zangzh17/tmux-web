@@ -190,7 +190,7 @@ test('a stale instance, an unknown session or a malformed ID never receives inpu
 
 test('a pane that is not running Claude answers 409 and gets nothing', async () => {
   const res = await input({ text: 'hi' }, {}, plain);
-  assert.deepEqual([res.status, res.body], [409, { error: 'no Claude in this pane' }]);
+  assert.deepEqual([res.status, res.body], [409, { error: 'no Claude or Gemini in this pane' }]);
   assert.equal((await input({ key: 'Enter' }, {}, plain)).status, 409);
   await delay(150);
   assert.ok(!api.tmux('capture-pane', '-p', '-t', plain.id).includes('hi'), 'cat never saw the text');
@@ -272,7 +272,7 @@ test('transcript reports busy and asking from what Claude Code shows on screen, 
   assert.deepEqual([ask.busy, ask.asking], [false, true]);
   const idle = await show('\u273b Done.\n> \n? for shortcuts\n', 'Done.');
   assert.deepEqual([idle.busy, idle.asking], [false, false]);
-  assert.deepEqual(Object.keys(idle).sort(), ['asking', 'busy', 'file', 'id', 'items', 'session', 'start', 'total']);
+  assert.deepEqual(Object.keys(idle).sort(), ['agent', 'asking', 'busy', 'file', 'id', 'items', 'session', 'start', 'total']);
   // no extra field on the 404 paths
   const other = await api.request('GET', sessionPath(plain.id, 'transcript'));
   assert.equal(other.status, 404);

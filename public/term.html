@@ -209,6 +209,10 @@
   /* ---- Read dialog, conversation mode (Claude warm dark). term.js adds .claude only for Claude transcripts. */
   #text-dialog.claude { --bg: #262624; --bar: #1f1e1d; --surface: #30302e; --bubble: #3a3936; --line: #3d3c38; --text: #ece9e1; --muted: #a39f94; --accent: #d97757; --key: #30302e; --key-on: #4a3a33; --code: #1c1b1a; --code-inline: #e9a585; --danger: #f0867f; }
   #text-dialog.claude #text-output::selection, #text-dialog.claude #text-output *::selection { background: #5d4437; }
+  /* Gemini's conversation (term.js adds .gemini instead): the same layout in a cool dark, blue to violet */
+  #text-dialog.gemini { --bg: #1d2029; --bar: #171a22; --surface: #262a35; --bubble: #2d3342; --line: #333a4a; --text: #e6e9f2; --muted: #9aa3b8; --accent: #7aa7ff; --key: #262a35; --key-on: #34405e; --code: #14171e; --code-inline: #a9c4ff; --danger: #f0867f; }
+  #text-dialog.gemini #text-output::selection, #text-dialog.gemini #text-output *::selection { background: #3a4a72; }
+  #text-dialog.gemini .who { width: fit-content; background: linear-gradient(90deg, #7aa7ff, #b394ff); -webkit-background-clip: text; background-clip: text; color: transparent; }
   #text-output.chat { max-width: calc(var(--read-width) / var(--read-scale)); margin: 0 auto; padding: 2px 0 20px; font: 15.5px/1.65 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif; }
   /* The confirm dialog's `dialog p` (muted, 14px) must not leak into the reading text. */
   #text-output p { color: inherit; font-size: inherit; line-height: inherit; }
@@ -397,7 +401,7 @@
   #keys button.bs { font-size: 1.15rem; }
   #keys button.ctl { color: #e0af68; }
   /* Claude's own commands only where Claude runs (never in the scratch terminal), `claude` itself only where it does not */
-  html.mode-shell .claude-only, html.mode-claude .shell-only { display: none !important; }
+  html.mode-shell .claude-only, html.mode-claude .shell-only, html.mode-gemini .claude-only, html.mode-gemini .shell-only { display: none !important; }
   /* ← / → held on a touch screen: move 5, 10 or 20 at once */
   #arrow-pop { position: absolute; z-index: 14; display: flex; gap: 6px; padding: 6px; border: 1px solid var(--line); border-radius: 14px; background: var(--bar); box-shadow: 0 12px 34px #000c; animation: pop-in 0.14s ease-out; }
   #arrow-pop[hidden] { display: none; }
@@ -872,6 +876,6 @@
     <button id="upload-paste" class="primary" type="button" hidden>Paste</button>
   </div>
 </dialog>
-<script src="term.js?v=20261112-draft"></script>
+<script src="term.js?v=20261120-gemini"></script>
 </body>
 </html>

@@ -224,6 +224,8 @@
   const chat = { items: [], start: 0, total: 0, file: null, loading: false, retryAt: 0 };
   let atBottom = true; // the reader is at (or following) the newest message
   const pending = []; // messages sent from here that the transcript does not show yet: { text, after, at }
+  let chatAgent = 'claude'; // whose conversation the Read view shows: 'claude' or 'gemini' (transcript `agent`)
+  const agentName = () => (chatAgent === 'gemini' ? 'Gemini' : 'Claude');
   let busy = false; // a Claude turn is running (the server reads this from the pane)
   let asking = false; // a permission prompt is waiting for a key
   let askingShown = false; // the screen panel was already opened for the current prompt
@@ -437,7 +439,7 @@
         if (item.ts) msg.append(make('div', 'time', formatTime(item.ts)));
         frag.append(msg);
       } else if (item.kind === 'assistant') {
-        if (!claude) { frag.append(make('div', 'who', '✻ Claude')); claude = true; }
+        if (!claude) { frag.append(make('div', 'who', chatAgent === 'gemini' ? '✦ Gemini' : '✻ Claude')); claude = true; }
         const msg = make('div', 'msg asst');
         const body = make('div', 'body');
         fill(item, body, true);
@@ -491,7 +493,7 @@
         claude = false;
         frag.append(who(`You${item.ts ? ` · ${formatTime(item.ts)}` : ''}`), text(`\n${item.text}\n\n`));
       } else if (item.kind === 'assistant') {
-        if (!claude) { frag.append(who('Claude', ' claude'), text('\n')); claude = true; }
+        if (!claude) { frag.append(who(agentName(), ' claude'), text('\n')); claude = true; }
         frag.append(text(`${item.text}\n\n`));
       } else if (item.kind === 'command') {
         claude = false;
@@ -629,7 +631,7 @@
   }
   function showPlain(kind, text) {
     mode = kind;
-    $textDialog.classList.remove('claude');
+    $textDialog.classList.remove('claude', 'gemini');
     $textHeading.textContent = kind === 'history' ? 'History' : 'Screen';
     $textInstruction.textContent = kind === 'screen' ? `Current screen; the terminal keeps running. ${plainHint}` : plainHint;
     $textInstruction.hidden = false;
@@ -663,7 +665,11 @@
         Object.assign(chat, { items: data.items, start: data.start, total: data.total, file: data.file, loading: false, retryAt: 0 });
         busy = !!data.busy;
         asking = !!data.asking;
-        $textDialog.classList.add('claude');
+        chatAgent = data.agent === 'gemini' ? 'gemini' : 'claude';
+        $textDialog.classList.remove('claude', 'gemini');
+        $textDialog.classList.add(chatAgent);
+        $workingText.querySelector('.lead').textContent = `${agentName()} is `;
+        $workingStop.title = `Interrupt ${agentName()} (Esc)`;
         $textInstruction.hidden = true;
         $textRender.setAttribute('aria-pressed', String(renderOn));
         applyChatView();
@@ -733,7 +739,7 @@
     $workingWhat.textContent = asking ? 'asking for permission.' : 'working…';
     $workingStop.hidden = $workingScreen.hidden = readOnly;
     // a message sent while Claude works waits in its queue; this sends it at once (Claude Code's Ctrl+X Ctrl+S)
-    $workingNow.hidden = readOnly || !busy || asking || !pending.some((entry) => entry.sent);
+    $workingNow.hidden = readOnly || chatAgent !== 'claude' || !busy || asking || !pending.some((entry) => entry.sent);
     $working.hidden = false;
     if (stick) toBottom();
     // A prompt needs a key, not text: show the screen once per prompt (closing it keeps it closed until the next one).
@@ -742,7 +748,8 @@
   }
   function setComposerEnabled(on) {
     $composerInput.disabled = !on;
-    $composerInput.placeholder = on ? 'Message Claude…' : 'Claude is not running in this session. Tap Refresh to check again.';
+    $composerInput.placeholder = on ? `Message ${agentName()}…` : `${agentName()} is not running in this session. Tap Refresh to check again.`;
+    $composerInput.setAttribute('aria-label', `Message to ${agentName()}`);
     syncSend();
   }
   const syncSend = () => { $composerSend.disabled = sending || $composerInput.disabled || !$composerInput.value.trim(); };
@@ -870,7 +877,7 @@
     if (res.ok) return;
     throw new Error({
       404: 'This session has ended or changed. Close this view and open it again.',
-      409: 'Claude is not running in this session any more.',
+      409: `${agentName()} is not running in this session any more.`,
       400: 'That could not be sent (empty, too long, or invalid).',
       413: 'That message is too long.',
     }[res.status] || 'Could not send. Try again, or reload and sign in again if this continues.');
@@ -1088,7 +1095,7 @@
     const range = window.getSelection();
     if ($textOutput.contains(range?.anchorNode)) range.removeAllRanges();
     $textOutput.replaceChildren();
-    $textDialog.classList.remove('claude');
+    $textDialog.classList.remove('claude', 'gemini');
     opener.focus({ preventScroll: true });
     if (!coarse) w?.term?.focus();
     if ($scratch.open) showSheet($scratch); // what was over the Read view goes back over the terminal
@@ -1965,18 +1972,22 @@
       if (!res.ok) return null;
       const mine = (await res.json()).sessions.find((s) => s.id === sessionId);
       if (mine) lastRow = mine;
-      const running = !!mine && (mine.claude ?? /claude/i.test(mine.command || ''));
-      if (claudeHere !== running) { claudeHere = running; applyMode(); }
+      const agent = mine ? mine.agent ?? (mine.claude ?? /claude/i.test(mine.command || '') ? 'claude' : null) : null;
+      const running = !!agent; // Claude or Gemini: either way `claude` must not be typed into it
+      if (claudeHere !== running || agentHere !== agent) { claudeHere = running; agentHere = agent; applyMode(); }
       return running;
     } catch { return null; }
   }
   // ---- Claude or a shell: Claude's own commands (and Send now) are offered only while Claude runs here, never in the scratch
   // terminal, and `claude` (to start it) only while it does not. Not known yet: everything is offered.
+  // Gemini (agy) gets neither: Claude's commands mean nothing to it. claudeHere: an agent runs here; agentHere: which one.
   let claudeHere = null;
+  let agentHere = null;
   function applyMode() {
     const root = document.documentElement.classList;
     const scratchShown = !!scratch && document.getElementById('scratch').open;
-    root.toggle('mode-claude', !scratchShown && claudeHere === true);
+    root.toggle('mode-claude', !scratchShown && claudeHere === true && agentHere !== 'gemini');
+    root.toggle('mode-gemini', !scratchShown && claudeHere === true && agentHere === 'gemini');
     root.toggle('mode-shell', scratchShown || claudeHere === false);
   }
   setInterval(() => { if (!document.hidden && sessionId && !readOnly) void claudeRunning(); }, 20000);
@@ -2612,7 +2623,7 @@
     copyStatus('Loading…');
     let text;
     try {
-      if (source === 'conversation') text = conversationText((await getJson('transcript?count=500')).items);
+      if (source === 'conversation') { const conv = await getJson('transcript?count=500'); chatAgent = conv.agent === 'gemini' ? 'gemini' : 'claude'; text = conversationText(conv.items); }
       else {
         const res = await fetch(`api/sessions/${encodeURIComponent(source === 'scratch' ? scratch.id : sessionId)}/history?lines=5000`, { credentials: 'same-origin', cache: 'no-store' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -2948,9 +2959,11 @@
     }, 100);
   });
   // The foreground command says it; failing that (a wrapper, a renamed binary) ask for the conversation itself.
+  // Gemini (agy) too: its conversation opens the same way. agentHere says which of the two.
   async function isClaudePane(session) {
-    if (session.claude ?? /claude/i.test(session.command || '')) return true;
-    try { await getJson('transcript?count=1'); return true; } catch { return false; }
+    if (session.agent) { agentHere = session.agent; return true; }
+    if (session.claude ?? /claude/i.test(session.command || '')) { agentHere = 'claude'; return true; }
+    try { agentHere = (await getJson('transcript?count=1')).agent || 'claude'; return true; } catch { return false; }
   }
   async function connect() {
     try {
