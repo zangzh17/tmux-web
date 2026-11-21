@@ -261,14 +261,33 @@ const tmux = (args, maxBuffer = 1 << 20) => new Promise((resolve, reject) => {
   });
 });
 
-async function peek(paneId) {
+async function peek(paneId, agent = null) {
   if (!PREVIEW || !/^%\d+$/.test(paneId)) return [];
   try {
-    return (await tmux(['capture-pane', '-p', '-S', '-100', '-t', paneId])).split('\n')
+    const lines = (await tmux(['capture-pane', '-p', '-S', '-100', '-t', paneId])).split('\n')
       .map((l) => l.replace(/[\u0000-\u001f\u007f]/g, '').trimEnd())
-      .filter((l) => l.trim()).slice(-50).map((l) => l.slice(0, 160));
+      .filter((l) => l.trim());
+    return (agent ? agentScreen(lines) : lines).slice(-50).map((l) => l.slice(0, 160));
   } catch { return []; }
 }
+// Claude's and agy's screens end in their own furniture: a rule, the input line (❯ / >, with a draft not yet sent), a rule, then
+// a status line, mode or "? for shortcuts". A card's preview shows what was said above it, not that (on a phone it was most of
+// the preview, cut off at the right). Anything else (a permission prompt, a menu) is left as it is.
+const RULE = /^\s*[─━═]{8,}(?:[^─━═]{1,60}[─━═]*)?\s*$/; // Claude puts the conversation's title into the top one
+function agentScreen(lines) {
+  for (let i = lines.length - 1; i > 0; i--) {
+    if (!RULE.test(lines[i])) continue;
+    let top = i - 1; // the rule above the input box: the line after it is the prompt
+    while (top >= 0 && !RULE.test(lines[top])) top--;
+    if (top >= 0 && /^\s*[>❯›]( |$)/.test(lines[top + 1] || '') && i - top <= 12) return trimChrome(lines.slice(0, top));
+  }
+  return trimChrome(lines);
+}
+const trimChrome = (lines) => {
+  const out = lines.filter((l) => !/^\s*\? for shortcuts\b/.test(l) && !/^\s*How's the CLI experience so far\?/.test(l) && !/^\s*\[1\] Good\s+\[2\] Fine\b/.test(l));
+  while (out.length && RULE.test(out.at(-1))) out.pop();
+  return out;
+};
 
 async function listRows() {
   let out;
@@ -317,7 +336,7 @@ async function listSessions(user, specs, light) {
       ...row, owner: multiUser() ? ownerOf(owner) : null, mine: multiUser() && owner === user.email, access, foreign: foreign(user, owner),
       share: access === 'full' && multiUser() ? sharedWith(share) : [], // whom it is shared with: for those who may change that
       sharedWithMe: shareOf(share).get(user.email) || null,
-      preview: light ? [] : await peek(paneId),
+      preview: light ? [] : await peek(paneId, agentOf(row.command)),
       claude: CLAUDE_COMMAND.test(row.command), // what counts as Claude (TMUX_WEB_CLAUDE_COMMAND), so pages need not guess
       agent: agentOf(row.command), // 'claude', 'gemini' (TMUX_WEB_GEMINI_COMMAND) or null: the list's filter and the cards' colors
       ...(light || !agentOf(row.command) ? { context: null, spend: null }

@@ -161,6 +161,19 @@ test('gemini: the pane\'s conversation in the list, the Read view, input and the
     near(g.kinds.week.thinking, 200_000 * 3.75 / 1e6 + 500 * 15 / 1e6, 'thinking priced as output, shown apart');
     assert.deepEqual(g.models.week.map((m) => m.model), ['gemini-3.8-flash-medium', 'gemini-4-neon-high']);
     assert.equal(g.tokens.week, 10_000 + 2_000 + 90_000 + 1_000 + 100 + 120_000 + 1_000_000 + 1_000_000);
+
+    // a result says which call it answers (metadata 4); one agy has cleared (status 5, its call gone too) keeps the tool's name
+    const callMeta = (tt, sid, call, name) => [...meta(tt, sid), [4, [[1, call], [2, name]]]];
+    writeConversation(root, conv, [...steps,
+      reply(t - 200, 's6', '', [['edit_file', { TargetFile: '/x/z.js' }]], [NEON, 10, 10, 0, 0]),
+      { type: 132, status: 3, payload: pb([1, 132], [4, 3], [5, callMeta(t - 199, 's7', 'call_edit_file', 'edit_file')], [140, [[2, [[1, 'ok']]]]]) },
+      { type: 132, status: 5, payload: pb([1, 132], [4, 5], [5, callMeta(t - 198, 's8', 'call_old', 'read_file')], [140, [[2, []]]]) }]);
+    tr = (await api.request('GET', sessionPath(id, 'transcript', '?after=7'))).body;
+    assert.deepEqual(tr.items.map((i) => [i.kind, i.name ?? null, i.id ?? null, i.text, i.cleared ?? false]), [
+      ['tool', 'edit_file', 'call_edit_file', '/x/z.js', false],
+      ['result', 'edit_file', 'call_edit_file', 'ok', false],
+      ['result', 'read_file', 'call_old', '', true],
+    ]);
   } finally { await api.stop(); }
 });
 

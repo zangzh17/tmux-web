@@ -197,7 +197,7 @@
     if (AGENTS[kind]) meta.append(agentTag(kind));
     if (s.context) meta.append(contextMeter(s.context, kind));
     meta.append(...ownerTag(s));
-    meta.append(el('span', null, `${s.windows} ${s.windows === 1 ? 'window' : 'windows'}`));
+    if (s.windows > 1) meta.append(el('span', null, `${s.windows} windows`)); // one is the usual case: not worth a phone's line
     meta.append(s.attached > 0 ? el('span', 'badge-on', `● Attached ×${s.attached}`) : el('span', null, 'Detached'));
     meta.append(el('span', null, ago(Math.max(0, now - s.activity))));
     const where = el('div', 'where');

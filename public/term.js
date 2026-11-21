@@ -268,10 +268,20 @@
       marked.use({ renderer: {
         code: ({ text, lang }) => codeBlock(text, lang),
         image: ({ href, text }) => `<a href="${esc(href || '')}">[image${text ? `: ${esc(text)}` : ''}]</a>`, // never fetch remote images
+        // a link to a file on this machine (Gemini writes [name](file:///abs/path)): opens in the file viewer, not a new tab
+        link(token) {
+          const p = localLink(token.href);
+          return p == null ? false : `<a class="path-link" data-path="${esc(p)}" title="${esc(p)}">${this.parser.parseInline(token.tokens)}</a>`;
+        },
       } });
     })().catch((error) => { libs = null; throw error; });
     return libs;
   }
+  const localLink = (href) => {
+    if (typeof href !== 'string') return null;
+    if (/^file:\/\//i.test(href)) { try { return decodeURIComponent(href.replace(/^file:\/\/(?:localhost)?/i, '')); } catch { return href.replace(/^file:\/\/(?:localhost)?/i, ''); } }
+    return /^(?:\/|~\/)[^\s]*$/.test(href) && !href.startsWith('//') ? href : null; // an absolute path (not //host)
+  };
   const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const LANG_ALIAS = { sh: 'bash', zsh: 'bash', console: 'bash', shell: 'bash', py: 'python', js: 'javascript', ts: 'typescript', m: 'matlab', yml: 'yaml' };
   const libsReady = () => typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined' && typeof katex !== 'undefined' && typeof hljs !== 'undefined';
@@ -375,10 +385,11 @@
     }
     node.textContent = item.text;
   };
+  const SHELL_TOOLS = new Set(['Bash', 'run_command']); // Claude's and Gemini's (agy's)
   const toolCode = (item) => {
     const pre = make('pre');
     const code = make('code');
-    if (item.name === 'Bash' && renderOn && libsReady()) { code.className = 'hljs'; code.innerHTML = highlight(item.text, 'bash').html; } else code.textContent = item.text;
+    if (SHELL_TOOLS.has(item.name) && renderOn && libsReady()) { code.className = 'hljs'; code.innerHTML = highlight(item.text, 'bash').html; } else code.textContent = item.text;
     pre.append(code);
     return pre;
   };
@@ -393,30 +404,39 @@
     return node;
   }
   function stepsNode(group) {
-    const tools = group.filter(([item]) => item.kind === 'tool');
+    // A result belongs to its call: by the call's id where both have one (Gemini), else to the oldest tool still waiting for one.
+    // A result with no tool (page cut, or agy cleared the call from its history) stands alone, under its own tool name if it has one.
+    let waiting = [];
+    const entries = [];
+    const byId = new Map();
+    for (const [item, index] of group) {
+      if (item.kind === 'tool') {
+        const entry = { tool: [item, index], result: null };
+        entries.push(entry);
+        if (item.id) byId.set(item.id, entry); else waiting.push(entry);
+      } else if (item.id && byId.get(item.id) && !byId.get(item.id).result) byId.get(item.id).result = [item, index];
+      else if (!item.id && waiting.length) waiting.shift().result = [item, index];
+      else entries.push({ tool: item.name ? [{ kind: 'tool', name: item.name, text: '' }, index] : null, result: [item, index] });
+    }
+    waiting = null;
+    const tools = entries.filter((e) => e.tool);
     const counts = new Map();
-    for (const [item] of tools) counts.set(item.name || 'Tool', (counts.get(item.name || 'Tool') || 0) + 1);
+    for (const { tool: [item] } of tools) counts.set(item.name || 'Tool', (counts.get(item.name || 'Tool') || 0) + 1);
+    const cleared = group.filter(([item]) => item.cleared).length;
     const total = tools.length || group.length;
-    const label = [`${total} ${total === 1 ? 'step' : 'steps'}`, ...[...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n))].join(' · ');
+    const label = [`${total} ${total === 1 ? 'step' : 'steps'}${cleared ? ` (${cleared === total ? 'all' : cleared} cleared)` : ''}`, ...[...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n))].join(' · ');
     const node = make('details', `steps${group.some(([item]) => item.error) ? ' err' : ''}`);
     node.dataset.key = `s${group[0][1]}`;
     const summary = make('summary', null, null);
     summary.append(make('span', 's-text', label));
     summary.title = label;
     node.append(summary);
-    // A result belongs to the oldest tool still waiting for one; results with no tool (page cut) stand alone.
-    let waiting = [];
-    const entries = [];
-    for (const [item, index] of group) {
-      if (item.kind === 'tool') { const entry = { tool: [item, index], result: null }; entries.push(entry); waiting.push(entry); }
-      else if (waiting.length) waiting.shift().result = [item, index];
-      else entries.push({ tool: null, result: [item, index] });
-    }
-    waiting = null;
     for (const { tool, result } of entries) {
       const step = make('div', 'step');
-      if (tool) step.append(make('span', 'tool-name', tool[0].name || 'Tool'), toolCode(tool[0]));
-      if (result) step.append(resultNode(result[0], result[1]));
+      if (tool) step.append(make('span', 'tool-name', tool[0].name || 'Tool'));
+      if (tool && tool[0].text) step.append(toolCode(tool[0]));
+      if (result?.[0].cleared) step.append(make('div', 'cleared', 'Cleared from the history by agy'));
+      else if (result) step.append(resultNode(result[0], result[1]));
       node.append(step);
     }
     return node;
@@ -1130,6 +1150,8 @@
   }, { passive: true });
   new ResizeObserver(() => { if (atBottom && mode === 'chat' && $textDialog.open) toBottom(); }).observe($textScroll);
   $textOutput.addEventListener('click', async (event) => {
+    const link = event.target.closest?.('a.path-link[data-path]');
+    if (link) { event.preventDefault(); void openView(link.dataset.path); return; }
     const button = event.target.closest?.('.copy-code');
     const code = button?.closest('.code-block')?.querySelector('code');
     if (!code) return;
@@ -1744,6 +1766,7 @@
     ctrlc: { l: '^C', s: '\x03', cls: 'warn', title: 'Ctrl+C: interrupt (pressed twice, it quits Claude)' },
     // Claude Code's chat:sendNow chord: a message queued while Claude works is sent at once, interrupting the turn
     now: { l: 'Send now', s: '\x18\x13', cls: 'now', only: 'claude', title: 'Send now (Ctrl+X Ctrl+S): Claude sends the queued message at once, interrupting its turn' },
+    nowg: { l: 'Send now', s: '\x1bm', cls: 'now', only: 'gemini', title: 'Send now (Alt+M): agy sends what is typed at once instead of queueing it' },
     pipe: { l: '|', s: '|' }, slash: { l: '/', s: '/' }, tilde: { l: '~', s: '~' },
     enter: { l: DEVICE === 'phone' ? '⏎' : 'Enter', s: '\r', cls: 'enter', title: 'Enter' }, // a phone's key is too narrow for the word
     pgup: { svg: '<path d="m7 11 5-5 5 5M7 18l5-5 5 5"/>', s: '\x1b[5~', rep: 1, title: 'Page up' },
@@ -1751,14 +1774,15 @@
   };
   // A phone's two rows (Enter takes the right edge of both): ↑↓ above, ←→ below, never one pair right over the other.
   const BAR = DEVICE === 'tablet'
-    ? { main: ['esc', 'menu', 'ctrlc', 'ctrlu', 'ctrla', 'ctrle', 'bs', 'tab', 'now', 'btab', 'pipe', 'slash', 'tilde'], pad: ['up', 'left', 'enter', 'right', 'down'] }
+    ? { main: ['esc', 'menu', 'ctrlc', 'ctrlu', 'ctrla', 'ctrle', 'bs', 'tab', 'now', 'nowg', 'btab', 'pipe', 'slash', 'tilde'], pad: ['up', 'left', 'enter', 'right', 'down'] }
     : DEVICE === 'phone'
       ? { main: ['esc', 'menu', 'tab', 'ctrlu', 'up', 'down', 'bs', 'enter', 'ctrla', 'left', 'right', 'ctrle', 'pipe', 'slash', 'tilde'] }
       : { main: ['esc', 'menu', 'tab', 'ctrla', 'ctrle', 'ctrlu', 'left', 'right', 'up', 'down', 'pipe', 'slash', 'tilde', 'bs', 'enter'] };
   // The commands menu (the second key). Typed text is submitted with a separate Enter a moment later: Claude Code treats text that
   // arrives together with a newline as a paste and would not submit it. `claude` is the only one with a guard: typed into a
   // running Claude it would be sent to it as a message. A row with `chips` is one row of choices (/effort max, xhigh, …).
-  // Claude's own commands (only: 'claude') are hidden where Claude does not run, and `claude` where it does (see applyMode).
+  // Claude's own commands (only: 'claude') are hidden where Claude does not run, agy's (only: 'gemini') where agy does not, and
+  // `claude` / `agy` (only: 'shell') where either runs (see applyMode).
   const COMMANDS = [
     { name: 'claude', hint: 'Start, skip permissions', text: 'claude --dangerously-skip-permissions', enter: true, notInClaude: true, only: 'shell' },
     { name: '/resume', hint: 'Pick a past conversation', text: '/resume', enter: true, only: 'claude' },
@@ -1767,8 +1791,18 @@
     { name: '/effort', hint: 'Set the thinking effort', text: '/effort', enter: true, only: 'claude' },
     { name: '/effort', chips: ['max', 'xhigh', 'high', 'medium', 'low'], only: 'claude' },
     { name: 'Send now', hint: 'Queued message, at once', text: '\x18\x13', title: 'Ctrl+X Ctrl+S', only: 'claude' },
+    // Gemini through agy (1.5): its own commands, the same idea. /effort there is also saved as agy's default for new sessions.
+    { name: 'agy', hint: 'Start Gemini, skip permissions', text: 'agy --dangerously-skip-permissions', enter: true, notInClaude: true, only: 'shell' },
+    { name: '/resume', hint: 'Pick a past conversation', text: '/resume', enter: true, only: 'gemini' },
+    { name: '/compact', hint: 'Compress the context', text: '/compact', enter: true, only: 'gemini' },
+    { name: '/model', hint: 'Switch the model', text: '/model', enter: true, only: 'gemini' },
+    { name: '/effort', hint: 'Effort (also the default)', text: '/effort', enter: true, only: 'gemini' },
+    { name: '/effort', chips: ['max', 'xhigh', 'high', 'medium', 'low'], only: 'gemini' },
+    { name: '/usage', hint: 'Quota left', text: '/usage', enter: true, only: 'gemini' },
+    { name: 'Mode', hint: 'Accept edits / auto / plan', text: '\x1b[Z', title: 'Shift+Tab: cycle agy\'s mode', only: 'gemini' },
+    { name: 'Send now', hint: 'Typed text, not queued', text: '\x1bm', title: 'Alt+M: send what is typed at once instead of queueing it', only: 'gemini' },
     { name: 'Paste', hint: 'From the clipboard', paste: true, title: 'Paste the clipboard into the terminal' },
-    { name: 'Ctrl-C', hint: 'Interrupt', text: '\x03', title: 'Ctrl+C' },
+    { name: 'Ctrl-C', hint: 'Interrupt', hints: { gemini: 'Go back / dismiss' }, text: '\x03', title: 'Ctrl+C' },
   ];
   const $cmdMenu = document.getElementById('cmd-menu');
   let $cmdButton = null;
@@ -2000,13 +2034,14 @@
     $cmdButton.setAttribute('aria-expanded', 'true');
     $cmdMenu.style.bottom = `${app.clientHeight - $keys.offsetTop + 6}px`;
     $cmdMenu.style.left = `${Math.max(6, Math.min(btn.left - appBox.left, appBox.width - $cmdMenu.offsetWidth - 6))}px`;
-    for (const r of cmdRows) { r.row.disabled = false; r.hint.textContent = r.c.hint; }
+    const hintOf = (c) => (agentHere && c.hints?.[agentHere]) || c.hint;
+    for (const r of cmdRows) { r.row.disabled = false; r.hint.textContent = hintOf(r.c); }
     const offered = (r) => !r.row.disabled && r.row.offsetParent !== null; // hidden rows (see applyMode) take no focus
     $cmdInfo.textContent = diagText();
     void claudeRunning().then((running) => {
       if ($cmdMenu.hidden) return;
       $cmdInfo.textContent = diagText();
-      for (const r of cmdRows) if (r.c.notInClaude && running) { r.row.disabled = true; r.hint.textContent = 'Already running'; }
+      for (const r of cmdRows) { r.hint.textContent = hintOf(r.c); if (r.c.notInClaude && running) { r.row.disabled = true; r.hint.textContent = 'Already running'; } }
       const focused = document.activeElement;
       if (!coarse && (!$cmdMenu.contains(focused) || focused.disabled || focused.offsetParent === null)) cmdRows.find(offered)?.row.focus(); // the focused row was just disabled or hidden
     });

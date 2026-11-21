@@ -7,7 +7,7 @@
 // off agy 1.5 (the CLI also logs a few steps as text, which names them):
 //   step types   14 user input (19.2 the text), 15 model response (20.1 the reply, 20.3 its thinking, 20.7 the tool calls:
 //                1 id, 2 name, 3 arguments as JSON), 132 a tool's result (5.4 the call, 140.2.1 the output, 148.3 a background
-//                command's output, 31.2 an error), 23 a context summary, 101 an injected reminder (not shown)
+//                command's output, 31.2 an error; metadata 4.1/4.2 the call's id and tool name), 23 a context summary, 101 an injected reminder (not shown)
 //   status       3 done, 4 invalid, 5 cleared, 6 cancelled, 7 error; 0-2 and 8-10 not finished (8 generating, 9 waiting
 //                for the user's approval)
 //   metadata     1 created (seconds), 9 the generation's model_usage: 1 model (a number, see GEMINI_MODELS), 2 input tokens
@@ -231,7 +231,8 @@ function stepItems(r, pendingResult) {
     if (text) out.push({ kind: 'assistant', text, ts });
     for (const call of many(resp, 7)) {
       const c = msg(call);
-      out.push({ kind: 'tool', name: str(one(c, 2)) || 'tool', text: toolText(str(one(c, 3))), ts });
+      const callId = str(one(c, 1));
+      out.push({ kind: 'tool', name: str(one(c, 2)) || 'tool', text: toolText(str(one(c, 3))), ts, ...(callId ? { id: callId } : {}) });
     }
     if (!text && !out.length && r.status === 7) out.push({ kind: 'notice', text: `Gemini stopped with an error${errorText(r, p) ? `: ${errorText(r, p)}` : ''}`, ts });
   } else if (r.step_type === 132) {
@@ -241,7 +242,12 @@ function stepItems(r, pendingResult) {
     else if (r.status === 6) text = 'Cancelled';
     else if (error) text = errorText(r, p) || 'Failed';
     else text = resultBody(tidy(str(at(p, 140, 2, 1)) || str(at(p, 148, 3))));
-    out.push({ kind: 'result', text: clip(text.trim(), 40, 4000), ts, error });
+    // which call it answers (metadata 4: 1 the call's id, 2 the tool's name): agy clears old steps (status 5) down to this, the
+    // call that asked for it included, so a cleared result still says what ran
+    const callId = str(at(meta, 4, 1));
+    const name = str(at(meta, 4, 2));
+    const cleared = r.status === 5 && !text.trim();
+    out.push({ kind: 'result', text: clip(text.trim(), 40, 4000), ts, error, ...(callId ? { id: callId } : {}), ...(name ? { name } : {}), ...(cleared ? { cleared } : {}) });
   } else if (r.step_type === 23) {
     out.push({ kind: 'notice', text: 'Context summarised', ts });
   }

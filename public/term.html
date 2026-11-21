@@ -265,6 +265,8 @@
   :is(#text-output, #viewer-body) pre { margin: 0; padding: 10px 12px; overflow-x: auto; background: var(--code); font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
   :is(#text-output, #viewer-body) pre code { padding: 0; background: none; color: #e4dfd2; font: inherit; white-space: inherit; overflow-wrap: inherit; }
   .step pre { margin: 0; border-radius: 8px; }
+  .step .cleared { display: inline-block; margin-left: 8px; color: var(--muted); font-size: 12px; font-style: italic; }
+  .md a.path-link { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
   .res pre { max-height: 55vh; margin-top: 6px; border-radius: 8px; overflow-y: auto; }
   :is(#text-output, #viewer-body) .hljs-comment, :is(#text-output, #viewer-body) .hljs-quote { color: #8a8478; font-style: italic; }
   :is(#text-output, #viewer-body) .hljs-keyword, :is(#text-output, #viewer-body) .hljs-selector-tag, :is(#text-output, #viewer-body) .hljs-doctag, :is(#text-output, #viewer-body) .hljs-template-tag, :is(#text-output, #viewer-body) .hljs-template-variable { color: #d896c8; }
@@ -401,7 +403,8 @@
   #keys button.bs { font-size: 1.15rem; }
   #keys button.ctl { color: #e0af68; }
   /* Claude's own commands only where Claude runs (never in the scratch terminal), `claude` itself only where it does not */
-  html.mode-shell .claude-only, html.mode-claude .shell-only, html.mode-gemini .claude-only, html.mode-gemini .shell-only { display: none !important; }
+  /* agy's own commands only once agy is known to run here (not known yet: Claude's and the shell's are offered, as before) */
+  html.mode-shell .claude-only, html:not(.mode-gemini) .gemini-only, html.mode-claude .shell-only, html.mode-gemini .claude-only, html.mode-gemini .shell-only { display: none !important; }
   /* ← / → held on a touch screen: move 5, 10 or 20 at once */
   #arrow-pop { position: absolute; z-index: 14; display: flex; gap: 6px; padding: 6px; border: 1px solid var(--line); border-radius: 14px; background: var(--bar); box-shadow: 0 12px 34px #000c; animation: pop-in 0.14s ease-out; }
   #arrow-pop[hidden] { display: none; }
@@ -876,6 +879,6 @@
     <button id="upload-paste" class="primary" type="button" hidden>Paste</button>
   </div>
 </dialog>
-<script src="term.js?v=20261120-gemini"></script>
+<script src="term.js?v=20261121-agy"></script>
 </body>
 </html>
