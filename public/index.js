@@ -329,7 +329,7 @@
     $listTitle.hidden = someoneElse;
     $whoami.hidden = !(me?.multiUser && me.email);
     const elsewhere = !!me?.myAccount && me.account !== me.myAccount; // an admin in another account
-    if (!$whoami.hidden) $whoami.textContent = `Signed in as ${me.name} · ${me.email}${elsewhere ? ` · in the ${me.account} account` : ''}`;
+    if (!$whoami.hidden) $whoami.textContent = $whoami.title = `Signed in as ${me.name} · ${me.email}${elsewhere ? ` · in the ${me.account} account` : ''}`;
     $heading.textContent = 'Tmux sessions';
     if (elsewhere) $heading.append(el('span', 'muted', ` · ${me.account}`));
     document.title = elsewhere ? `Tmux sessions · ${me.account}` : 'Tmux sessions';

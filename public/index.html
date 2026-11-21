@@ -8,7 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <title>Tmux sessions</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="app.css?v=20261120-gquota">
+<link rel="stylesheet" href="app.css?v=20261121-whoami">
 </head>
 <body>
 <main>
@@ -16,11 +16,11 @@
     <div>
       <h1>Tmux sessions</h1>
       <p class="muted" id="host"></p>
-      <p class="muted" id="whoami" hidden></p>
     </div>
     <button class="usage-pill" id="usage-pill" type="button" aria-expanded="false" aria-controls="usage-panel" hidden></button>
     <button class="icon-btn" id="refresh" type="button" aria-label="Refresh sessions" title="Refresh sessions">⟳</button>
   </header>
+  <p class="muted whoami" id="whoami" hidden></p>
   <section class="usage-panel" id="usage-panel" aria-label="Usage of Claude and Gemini" hidden>
     <div class="usage-inner">
       <div class="usage-tabs" id="usage-tabs" role="tablist" aria-label="Whose usage" hidden></div>
@@ -94,6 +94,6 @@
     <button id="close-confirm" class="confirm" type="button">Close session</button>
   </div>
 </dialog>
-<script src="index.js?v=20261121-agy"></script>
+<script src="index.js?v=20261121-whoami"></script>
 </body>
 </html>

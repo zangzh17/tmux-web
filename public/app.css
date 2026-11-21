@@ -31,6 +31,8 @@ main { width: 100%; min-width: 0; margin: 0; padding: 14px clamp(12px, 2vw, 24px
 .top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .top > div { min-width: 0; }
 .top .icon-btn { flex: none; }
+/* who is signed in: its own line under the header (beside the usage pill it squeezed the title into a column one letter wide) */
+.whoami { margin: -4px 0 12px; overflow: hidden; font-size: 0.8rem; line-height: 1.35; white-space: nowrap; text-overflow: ellipsis; }
 .top p { overflow-wrap: anywhere; }
 h1 { margin: 0; font-size: 1.25rem; line-height: 1.25; letter-spacing: -0.01em; }
 .top p { margin: 1px 0 0; font-size: 0.8rem; line-height: 1.35; }
@@ -60,7 +62,7 @@ h1 { margin: 0; font-size: 1.25rem; line-height: 1.25; letter-spacing: -0.01em; 
 /* the bar above the list: whose sessions (chips that scroll sideways on a phone) and how many preview lines (− n +) */
 .list-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 34px; margin: 0 0 10px; }
 .list-title { color: var(--muted); font-size: 0.75rem; font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase; }
-.owner-filter { flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 16px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 16px), transparent); }
+.owner-filter { flex: 1 1 0; min-width: 0; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 16px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 16px), transparent); }
 .owner-filter::-webkit-scrollbar { display: none; }
 .chips { display: flex; gap: 6px; width: max-content; padding: 2px 16px 2px 2px; }
 .chips button { display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font: 550 0.82rem/1 system-ui, sans-serif; white-space: nowrap; cursor: pointer; touch-action: manipulation; transition: color 0.15s, background 0.15s, border-color 0.15s; }
