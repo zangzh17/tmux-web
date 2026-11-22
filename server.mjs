@@ -1253,11 +1253,12 @@ function promptRows(screen) {
   const start = end > 0 ? lines.slice(0, end).findLastIndex((l) => PROMPT_RULE.test(l)) : -1;
   return start < 0 ? null : lines.slice(start + 1, end);
 }
+const normBox = (t) => t.replace(/^\s*[❯>]\s*/, '').replace(/\s+/g, '');
 const promptHasText = (rows) => rows.join('\n').replace(/^\s*[❯>]\s*/, '').replace(/^Try ".*"\s*$/s, '').trim() !== '';
 async function clearPrompt(pane) {
   for (let attempt = 0; attempt < 3; attempt++) {
     const screen = await tmux(['capture-pane', '-p', '-t', pane]).catch(() => '');
-    const rows = SCREEN_ASKING.test(screen) ? null : promptRows(screen);
+    const rows = SCREEN_ASKING.test(screen) || GEMINI_ASKING.test(screen) ? null : promptRows(screen);
     if (!rows || !promptHasText(rows)) return;
     await tmux(['send-keys', '-t', pane, ...Array.from({ length: Math.max(rows.length, 3) + 1 }, () => ['C-u', 'BSpace']).flat()]);
     await new Promise((resolve) => setTimeout(resolve, 120));
@@ -1284,6 +1285,7 @@ async function sessionInput(req, id) {
   if (text !== undefined) {
     if (typeof text !== 'string') return { status: 400, body: { error: 'invalid text' } };
     message = text.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '').replace(/\s+$/, '');
+    if (message.endsWith('\\')) message += ' '; // agy (and Claude) take "\ + Enter" as a new line, not as send
     if (!message || message.length > INPUT_MAX) return { status: 400, body: { error: message ? 'message too long' : 'empty message' } };
   } else if (typeof key !== 'string' || !INPUT_KEYS.has(key)) {
     return { status: 400, body: { error: 'key not allowed' } };
@@ -1311,6 +1313,15 @@ async function sessionInput(req, id) {
     }
     await new Promise((resolve) => setTimeout(resolve, settleMs(message))); // let the TUI take the paste before Enter submits it
     await tmux(['send-keys', '-t', pane, 'Enter']);
+    // Still in the box? (an Enter the TUI took while it was busy redrawing, seen with agy now and then.) Enter again, at most
+    // twice: on an empty box Enter does nothing, so a box that was merely slow to redraw costs nothing.
+    const head = normBox(message.split('\n')[0]).slice(0, 24);
+    for (let i = 0; i < 2 && head; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      const rows = promptRows(await tmux(['capture-pane', '-p', '-t', pane]).catch(() => ''));
+      if (!rows || !normBox(rows.join(' ')).includes(head)) break;
+      await tmux(['send-keys', '-t', pane, 'Enter']);
+    }
   });
   return { status: 200, body: { ok: true } };
 }
