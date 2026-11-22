@@ -1801,6 +1801,9 @@
     { name: '/usage', hint: 'Quota left', text: '/usage', enter: true, only: 'gemini' },
     { name: 'Mode', hint: 'Accept edits / auto / plan', text: '\x1b[Z', title: 'Shift+Tab: cycle agy\'s mode', only: 'gemini' },
     { name: 'Send now', hint: 'Typed text, not queued', text: '\x1bm', title: 'Alt+M: send what is typed at once instead of queueing it', only: 'gemini' },
+    // either agent: branch the conversation into a new session (and open it), or quit and keep it under Stashed on the list
+    { name: 'Fork', hint: 'New session, same conversation', action: 'fork', title: 'A new session on a branch of this conversation; this one is left as it is', only: 'agent' },
+    { name: 'Stash', hint: 'Quit, resume it later', action: 'stash', title: 'Quit the agent here and keep it under Stashed on the session list', only: 'agent' },
     { name: 'Paste', hint: 'From the clipboard', paste: true, title: 'Paste the clipboard into the terminal' },
     { name: 'Ctrl-C', hint: 'Interrupt', hints: { gemini: 'Go back / dismiss' }, text: '\x03', title: 'Ctrl+C' },
   ];
@@ -2049,11 +2052,38 @@
   }
   async function runCommand(c, row) {
     if (c.notInClaude && !scratchUp() && await claudeRunning()) { row.disabled = true; row.querySelector('.c-hint').textContent = 'Already running'; return; }
+    if (c.action) { void agentAction(c.action, row); return; }
     hideCmdMenu();
     if (c.paste) { void pasteInto(activeTerm(), () => (scratchUp() ? showPasteBox() : clipboardNotice(`Use ${isMac ? 'Cmd' : 'Ctrl'}+V to paste, or allow clipboard access for this site.`, true))); return; }
     send(c.text);
     if (c.enter) setTimeout(() => send('\r'), 150);
     if (!coarse) w?.term?.focus();
+  }
+  // Fork / Stash (api/sessions/:id/fork|stash). Stash asks for a second tap: it makes the agent quit.
+  async function agentAction(action, row) {
+    const hint = row.querySelector('.c-hint');
+    if (row.disabled) return;
+    if (action === 'stash' && !row.dataset.armed) { row.dataset.armed = '1'; hint.textContent = 'Tap again: it quits here'; setTimeout(() => { delete row.dataset.armed; }, 5000); return; }
+    delete row.dataset.armed;
+    row.disabled = true;
+    hint.textContent = action === 'fork' ? (agentHere === 'gemini' ? 'Starting agy, then /fork…' : 'Starting Claude…') : 'Waiting for it to quit…';
+    let res = null;
+    try {
+      res = await fetch(`api/sessions/${encodeURIComponent(sessionId)}/${action}`, {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ instance: sessionInstance }),
+      });
+    } catch { /* below */ }
+    if (res?.ok) {
+      const body = await res.json();
+      if (action === 'fork') { const u = new URL(location.href); u.search = ''; u.searchParams.set('s', body.name); u.searchParams.set('id', body.id); u.searchParams.set('instance', body.instance); location.assign(u.href); }
+      else location.assign(new URL('./', location.href).href); // back to the list, where it is under Stashed
+      return;
+    }
+    let message = res ? `HTTP ${res.status}` : 'No connection';
+    try { message = (await res.json()).error || message; } catch { /* as is */ }
+    row.disabled = false;
+    hint.textContent = message;
+    row.title = message;
   }
   // Esc closes the menu wherever the focus is (in the terminal too, where it must not also reach the program).
   const escapeMenu = (event) => {

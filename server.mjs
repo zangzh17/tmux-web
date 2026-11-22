@@ -1163,7 +1163,15 @@ async function sessionTranscript(id, query) {
   if (agentOf(command) === 'gemini') return geminiSessionTranscript(id, session, cwd, pane, +panePid, { before, after, asked });
   if (!CLAUDE_COMMAND.test(command || '')) return { status: 404, body: { error: 'no Claude conversation in this session' } };
   const mine = await paneConversation(pane, +panePid);
-  const file = mine ? await transcriptOf(mine.sessionId, mine.cwd || cwd) : await newestTranscript(cwd || '');
+  let file = mine ? await transcriptOf(mine.sessionId, mine.cwd || cwd) : await newestTranscript(cwd || '');
+  if (!file && mine) {
+    // a fork (`claude --resume X --fork-session`, see forkSession) writes its own file only with its first message; until then
+    // the conversation it branched from is what it shows
+    const pid = await agentProcess(+panePid, 'claude');
+    const argv = pid ? await argvOf(pid) : [];
+    const from = argv[argv.indexOf('--resume') + 1];
+    if (argv.includes('--fork-session') && argv.includes('--resume') && SESSION_UUID.test(from || '')) file = await transcriptOf(from, mine.cwd || cwd);
+  }
   if (!file) {
     // Claude says which conversation it is showing but has not written it yet: Claude Code makes the file with the first
     // message (a new session, or right after /clear). That is an empty conversation, not a missing one, so the Read view
@@ -1305,6 +1313,215 @@ async function sessionInput(req, id) {
     await tmux(['send-keys', '-t', pane, 'Enter']);
   });
   return { status: 200, body: { ok: true } };
+}
+
+// ---- stash and fork: a Claude or Gemini (agy) session set aside, or branched into a new one
+//   POST /api/sessions/:id/stash { instance } -> { stash, closed }   quits the agent (Esc first if it is working or asking, then
+//        /exit) and keeps what it takes to start it again: name, folder, agent, conversation id, its flags (the safe ones: see
+//        KEEP_FLAGS) and title; the tmux session is closed too when the agent was all it held (one window, one pane).
+//   GET  /api/stash -> { stash: [...] }                         what this person may resume (accessFor 'full' on its owner)
+//   POST /api/stash/:sid/resume {} -> { id, instance, name }     a new tmux session (the old name, or name-2 …) in the old
+//        folder, typing `claude --resume <id> …` or `agy --conversation <id> …` into its shell; the entry is then dropped
+//   DELETE /api/stash/:sid {} -> { ok }                          forget it (the conversation itself stays where it was)
+//   POST /api/sessions/:id/fork { instance } -> { id, instance, name, forked }   the conversation branched into a new session
+//        <name>-fork in the same folder, the original untouched: Claude by `--resume <id> --fork-session`; agy has no flag,
+//        so it opens the conversation and is sent /fork (what agy itself suggests when a conversation is open twice).
+// The list lives in TMUX_WEB_STASH (default ~/.local/state/tmux-web/stash.json), one per account (each backend has its own).
+const STASH_FILE = process.env.TMUX_WEB_STASH || path.join(os.homedir(), '.local', 'state', 'tmux-web', 'stash.json');
+const STASH_ID = /^[0-9a-f]{12}$(?![\s\S])/;
+const STASH_MAX = 200;
+function readStash() {
+  try { const list = JSON.parse(fs.readFileSync(STASH_FILE, 'utf8')); return Array.isArray(list) ? list.filter((e) => e && STASH_ID.test(e.id || '')) : []; } catch { return []; }
+}
+function writeStash(list) {
+  fs.mkdirSync(path.dirname(STASH_FILE), { recursive: true });
+  const tmp = `${STASH_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(list.slice(0, STASH_MAX), null, 1)}\n`, { mode: 0o600 });
+  fs.renameSync(tmp, STASH_FILE);
+}
+let stashChain = Promise.resolve();
+const stashLocked = (task) => { const r = stashChain.then(task); stashChain = r.catch(() => {}); return r; };
+const KEEP_FLAGS = {
+  claude: { bare: ['--dangerously-skip-permissions', '--verbose', '--ide', '--chrome'], value: ['--model', '--effort', '--permission-mode', '--add-dir', '--agent', '--fallback-model'] },
+  gemini: { bare: ['--dangerously-skip-permissions', '--sandbox'], value: ['--model', '--effort', '--mode', '--add-dir', '--agent', '--project'] },
+};
+const SAFE_VALUE = /^[\p{L}\p{N}_./:@=+,~ ()-]{1,200}$/u;
+function keptFlags(argv, agent) {
+  const keep = KEEP_FLAGS[agent];
+  const out = [];
+  const args = argv.slice(argv.findIndex((a) => a.startsWith('-')) >>> 0); // past the program (and a script path)
+  for (let i = 0; i < args.length; i++) {
+    const [flag, inline] = args[i].split(/=(.*)/s);
+    if (keep.bare.includes(flag) && inline === undefined) out.push(flag);
+    else if (keep.value.includes(flag)) {
+      const v = inline ?? args[++i];
+      if (typeof v === 'string' && SAFE_VALUE.test(v)) out.push(flag, v);
+    }
+  }
+  return out;
+}
+const shq = (v) => (/^[A-Za-z0-9_./:@=+,-]+$/.test(v) ? v : `'${String(v).replace(/'/g, `'\\''`)}'`);
+async function childPids(pid) {
+  try { return (await fs.promises.readFile(`/proc/${pid}/task/${pid}/children`, 'utf8')).trim().split(/\s+/).filter(Boolean).map(Number); } catch { return []; }
+}
+// the agent's own process under the pane (the pane's shell, or the pane itself when the agent is its command)
+async function agentProcess(panePid, agent) {
+  let level = [panePid];
+  for (let depth = 0; depth < 5 && level.length; depth++) {
+    for (const pid of level) {
+      let comm = '';
+      try { comm = (await fs.promises.readFile(`/proc/${pid}/comm`, 'utf8')).trim(); } catch { continue; }
+      if (agentOf(comm) === agent || agentOf(path.basename((await argvOf(pid))[0] || '')) === agent) return pid; // as tmux names it
+    }
+    level = (await Promise.all(level.map(childPids))).flat().slice(0, 64);
+  }
+  return null;
+}
+async function argvOf(pid) {
+  try { return (await fs.promises.readFile(`/proc/${pid}/cmdline`, 'utf8')).split('\0').filter((a, i, all) => a || i < all.length - 1); } catch { return []; }
+}
+// What runs in a session's active pane, and which conversation: null fields when it is not an agent or not known.
+async function agentFacts(id, instance) {
+  let f;
+  try {
+    f = (await tmux(['display-message', '-p', '-t', id, '#{session_id}\t#{pid}:#{session_created}\t#{session_name}\t#{pane_current_command}\t#{pane_id}\t#{pane_pid}\t#{pane_current_path}\t#{session_windows}\t#{window_panes}\t#{@tmux_web_owner}'])).replace(/\n$/, '').split('\t');
+  } catch (e) {
+    if (missingTarget(e)) return gone;
+    throw e;
+  }
+  const [found, live, name, command, pane, panePid, cwd, windows, panes, owner = ''] = f;
+  if (found !== id || live !== instance) return gone;
+  const agent = agentOf(command);
+  if (!agent || !/^%\d+$/.test(pane || '')) return { status: 409, body: { error: 'neither Claude nor Gemini runs in this session' } };
+  let conversation = null;
+  let title = '';
+  if (agent === 'claude') {
+    const rec = await paneConversation(pane, +panePid);
+    conversation = rec?.sessionId || null;
+    const file = conversation ? await transcriptOf(conversation, cwd).catch(() => null) : null;
+    if (!file) conversation = null; // nothing said yet: there is nothing to resume or branch
+    else title = spend.files.get(file)?.title || '';
+  } else {
+    const c = await geminiPaneConversation(+panePid, cwd);
+    conversation = c && !c.guessed ? c.id : null; // only the one agy holds open: a guess (the folder's last one) could be another
+    if (conversation) { try { if (!(await geminiTranscript(conversation)).items.length) conversation = null; } catch { conversation = null; } } // a fresh, empty one
+    if (conversation) title = (await geminiSummaries()).get(conversation)?.title || '';
+  }
+  if (!conversation) return { status: 409, body: { error: `this ${agent === 'claude' ? 'Claude' : 'Gemini'} session has no conversation yet (nothing has been sent)` } };
+  const pid = await agentProcess(+panePid, agent);
+  const flags = pid ? keptFlags(await argvOf(pid), agent) : ['--dangerously-skip-permissions'];
+  return { id, instance, name, agent, pane, panePid: +panePid, cwd, single: +windows === 1 && +panes === 1, owner: owner.trim().toLowerCase(), conversation, title, flags };
+}
+// what is typed to start them (TMUX_WEB_CLAUDE_BIN, TMUX_WEB_AGY_BIN: tests point these at stand-ins)
+const CLAUDE_BIN = process.env.TMUX_WEB_CLAUDE_BIN || 'claude';
+const AGY_BIN = process.env.TMUX_WEB_AGY_BIN || 'agy';
+const launchLine = (agent, conversation, flags, fork = false) => (agent === 'claude'
+  ? [CLAUDE_BIN, '--resume', conversation, ...(fork ? ['--fork-session'] : []), ...flags]
+  : [AGY_BIN, '--conversation', conversation, ...flags]).map(shq).join(' ');
+async function freeName(base) {
+  let names = [];
+  try { names = (await tmux(['list-sessions', '-F', '#{session_name}'])).split('\n'); } catch { /* no server */ }
+  const stem = String(base || 'session').replace(/[.:]/g, '-').slice(0, 44) || 'session';
+  for (let i = 1; i < 100; i++) { const n = i === 1 ? stem : `${stem}-${i}`; if (!names.includes(n)) return n; }
+  return `${stem}-${crypto.randomBytes(2).toString('hex')}`;
+}
+// a new session in `cwd` whose shell is given `line` to run (so the agent runs from a shell, as one started by hand would)
+async function launchIn(name, cwd, line, owner) {
+  const dir = isDir(cwd) ? cwd : os.homedir();
+  const [id, instance] = (await tmux(['new-session', '-d', '-s', name, '-c', dir, '-P', '-F', '#{session_id}\t#{pid}:#{session_created}'])).trim().split('\t');
+  try {
+    if (multiUser() && owner) await tmux(['set-option', '-t', id, '@tmux_web_owner', owner]);
+  } catch (e) { await tmux(['kill-session', '-t', id]).catch(() => {}); throw e; }
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await tmux(['send-keys', '-t', id, '-l', line]);
+  await tmux(['send-keys', '-t', id, 'Enter']);
+  return { id, instance, name };
+}
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function waitScreen(target, test, ms) {
+  for (const end = Date.now() + ms; Date.now() < end; await pause(400)) {
+    const screen = await tmux(['capture-pane', '-p', '-t', target]).catch(() => null);
+    if (screen === null) return false;
+    if (test(screen)) return true;
+  }
+  return false;
+}
+async function stashSession(req, user, id) {
+  const input = await readMutation(req);
+  if (input.status) return input;
+  const { instance } = input.data;
+  if (typeof instance !== 'string' || !SESSION_INSTANCE.test(instance)) return { status: 400, body: { error: 'invalid session identity' } };
+  const f = await agentFacts(id, instance);
+  if (f.status) return f;
+  await serialized(f.pane, async () => {
+    const screen = await tmux(['capture-pane', '-p', '-t', f.pane]).catch(() => '');
+    if (SCREEN_BUSY.test(screen) || SCREEN_ASKING.test(screen) || GEMINI_ASKING.test(screen)) { await tmux(['send-keys', '-t', f.pane, 'Escape']); await pause(900); }
+    await clearPrompt(f.pane);
+    await tmux(['send-keys', '-t', f.pane, '-l', '/exit']);
+    await pause(400);
+    await tmux(['send-keys', '-t', f.pane, 'Enter']);
+  });
+  let quit = false;
+  for (const end = Date.now() + 12_000; Date.now() < end && !quit; await pause(400)) {
+    const now = await tmux(['display-message', '-p', '-t', f.pane, '#{pane_id}\t#{pane_current_command}']).catch(() => '');
+    const [paneNow, command] = now.replace(/\n$/, '').split('\t');
+    quit = paneNow !== f.pane || agentOf(command || '') !== f.agent;
+  }
+  if (!quit) return { status: 409, body: { error: `${f.agent === 'claude' ? 'Claude' : 'agy'} did not quit; nothing was stashed. Look at the session and try again.` } };
+  const entry = {
+    id: crypto.randomBytes(6).toString('hex'), name: f.name, cwd: f.cwd, agent: f.agent, conversation: f.conversation, flags: f.flags,
+    title: f.title, owner: multiUser() ? (f.owner || user.email) : '', at: Math.floor(Date.now() / 1000),
+  };
+  await stashLocked(() => writeStash([entry, ...readStash().filter((e) => e.conversation !== entry.conversation)]));
+  let closed = false;
+  if (f.single) {
+    const r = await tmux(['if-shell', '-F', '-t', id, `#{==:#{pid}:#{session_created},${instance}}`, `kill-session -t '${id}'`, "display-message -p 'tmux-web: stale session'"]).catch(() => 'x');
+    closed = r.trim() === '';
+  }
+  return { status: 200, body: { stash: stashView(entry), closed } };
+}
+const stashView = (e) => ({ id: e.id, name: e.name, path: tildePath(e.cwd), agent: e.agent, title: e.title || '', at: e.at, owner: e.owner ? ownerOf(e.owner) : null, command: launchLine(e.agent, e.conversation, e.flags) });
+const tildePath = (p) => { const home = os.homedir(); return p === home || String(p).startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p; };
+const stashFor = (user) => readStash().filter((e) => accessFor(user, e.owner || '', '') === 'full');
+async function resumeStash(req, user, sid) {
+  const input = await readMutation(req);
+  if (input.status) return input;
+  return stashLocked(async () => {
+    const entry = stashFor(user).find((e) => e.id === sid);
+    if (!entry) return { status: 404, body: { error: 'not in the stash (resumed or forgotten already?)' } };
+    const s = await launchIn(await freeName(entry.name), entry.cwd, launchLine(entry.agent, entry.conversation, entry.flags), entry.owner || (multiUser() ? user.email : ''));
+    writeStash(readStash().filter((e) => e.id !== sid));
+    return { status: 201, body: { ...s, owner: ownerOf(entry.owner || user.email) } };
+  });
+}
+async function forgetStash(req, user, sid) {
+  const input = await readMutation(req);
+  if (input.status) return input;
+  return stashLocked(() => {
+    if (!stashFor(user).some((e) => e.id === sid)) return { status: 404, body: { error: 'not in the stash' } };
+    writeStash(readStash().filter((e) => e.id !== sid));
+    return { status: 200, body: { ok: true } };
+  });
+}
+async function forkSession(req, user, id) {
+  const input = await readMutation(req);
+  if (input.status) return input;
+  const { instance } = input.data;
+  if (typeof instance !== 'string' || !SESSION_INSTANCE.test(instance)) return { status: 400, body: { error: 'invalid session identity' } };
+  const f = await agentFacts(id, instance);
+  if (f.status) return f;
+  const s = await launchIn(await freeName(`${f.name}-fork`), f.cwd, launchLine(f.agent, f.conversation, f.flags, true), multiUser() ? user.email : '');
+  let forked = f.agent === 'claude';
+  if (f.agent === 'gemini') {
+    // agy is ready when its footer shows; then /fork moves this copy onto a branch of its own
+    if (await waitScreen(s.id, (t) => /\? for shortcuts|Gemini \d|esc to dismiss/.test(t) && /^\s*>\s*$/m.test(t), 30_000)) {
+      await tmux(['send-keys', '-t', s.id, '-l', '/fork']);
+      await pause(500);
+      await tmux(['send-keys', '-t', s.id, 'Enter']);
+      forked = await waitScreen(s.id, (t) => /Forked conversation/.test(t), 10_000);
+    }
+  }
+  return { status: 201, body: { ...s, owner: ownerOf(user.email), forked } };
 }
 
 // ---- uploads: files and folders from the browser, put where a session can use them (the page pastes their paths)
@@ -2059,10 +2276,10 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/files/view') return req.method === 'GET' ? sendJson(res, await viewFile(user, searchParams)) : send(res, 405, 'method not allowed');
     if (pathname === '/api/files/raw') return ['GET', 'HEAD'].includes(req.method) ? sendRaw(req, res, searchParams) : send(res, 405, 'method not allowed');
     // every /api/sessions/:id... route: id syntax, method, then what this person may do with that session, and only then the body
-    const sub = /^\/api\/sessions\/([^/]+)(?:\/(input|history|transcript|share))?$/.exec(pathname);
+    const sub = /^\/api\/sessions\/([^/]+)(?:\/(input|history|transcript|share|stash|fork))?$/.exec(pathname);
     if (sub) {
       const view = sub[2];
-      const methods = view === 'input' ? ['POST'] : view === 'share' ? ['PUT'] : view ? ['GET'] : ['PATCH', 'DELETE'];
+      const methods = ['input', 'stash', 'fork'].includes(view) ? ['POST'] : view === 'share' ? ['PUT'] : view ? ['GET'] : ['PATCH', 'DELETE'];
       if (!methods.includes(req.method)) return send(res, 405, 'method not allowed');
       let id;
       try { id = decodeURIComponent(sub[1]); } catch { return send(res, 400, 'invalid session id'); }
@@ -2076,8 +2293,17 @@ const server = http.createServer(async (req, res) => {
       const refused = await gate(user, id, view === 'history' || view === 'transcript' ? 'view' : 'full');
       if (refused) return sendJson(res, refused);
       if (view === 'input') return sendJson(res, await sessionInput(req, id));
+      if (view === 'stash') return sendJson(res, await stashSession(req, user, id));
+      if (view === 'fork') return sendJson(res, await forkSession(req, user, id));
       if (view) return sendJson(res, await (view === 'history' ? sessionHistory : sessionTranscript)(id, searchParams));
       return sendJson(res, await changeSession(req, id));
+    }
+    if (pathname === '/api/stash' && req.method === 'GET') return sendJson(res, { status: 200, body: { stash: stashFor(user).sort((a, b) => b.at - a.at).map(stashView) } });
+    const stashed = /^\/api\/stash\/([^/]+)(\/resume)?$/.exec(pathname);
+    if (stashed) {
+      if (req.method !== (stashed[2] ? 'POST' : 'DELETE')) return send(res, 405, 'method not allowed');
+      if (!STASH_ID.test(stashed[1])) return sendJson(res, { status: 404, body: { error: 'not in the stash' } });
+      return sendJson(res, stashed[2] ? await resumeStash(req, user, stashed[1]) : await forgetStash(req, user, stashed[1]));
     }
     if (pathname === '/api/uploads' && req.method === 'POST') return sendJson(res, await startUpload(req, user));
     const upload = /^\/api\/uploads\/([^/]+)(\/done)?$/.exec(pathname);
@@ -2087,7 +2313,7 @@ const server = http.createServer(async (req, res) => {
       if (upload[2]) return sendJson(res, await finishUpload(req, user, upload[1]));
       return sendJson(res, req.method === 'PUT' ? await uploadPiece(req, user, upload[1], searchParams) : cancelUpload(req, user, upload[1]));
     }
-    if (['/api/sessions', '/api/me', '/api/prefs', '/api/accounts', '/api/uploads', '/api/usage', '/api/scratch', '/api/files', '/verify'].includes(pathname)) return send(res, 405, 'method not allowed');
+    if (['/api/sessions', '/api/stash', '/api/me', '/api/prefs', '/api/accounts', '/api/uploads', '/api/usage', '/api/scratch', '/api/files', '/verify'].includes(pathname)) return send(res, 405, 'method not allowed');
     return send(res, 404, 'not found');
   } catch (e) {
     console.error('[tmux-web] handler error:', e.message);

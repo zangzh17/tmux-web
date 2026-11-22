@@ -404,7 +404,7 @@
   #keys button.ctl { color: #e0af68; }
   /* Claude's own commands only where Claude runs (never in the scratch terminal), `claude` itself only where it does not */
   /* agy's own commands only once agy is known to run here (not known yet: Claude's and the shell's are offered, as before) */
-  html.mode-shell .claude-only, html:not(.mode-gemini) .gemini-only, html.mode-claude .shell-only, html.mode-gemini .claude-only, html.mode-gemini .shell-only { display: none !important; }
+  html:not(.mode-claude):not(.mode-gemini) .agent-only, html.mode-shell .claude-only, html:not(.mode-gemini) .gemini-only, html.mode-claude .shell-only, html.mode-gemini .claude-only, html.mode-gemini .shell-only { display: none !important; }
   /* ← / → held on a touch screen: move 5, 10 or 20 at once */
   #arrow-pop { position: absolute; z-index: 14; display: flex; gap: 6px; padding: 6px; border: 1px solid var(--line); border-radius: 14px; background: var(--bar); box-shadow: 0 12px 34px #000c; animation: pop-in 0.14s ease-out; }
   #arrow-pop[hidden] { display: none; }
@@ -879,6 +879,6 @@
     <button id="upload-paste" class="primary" type="button" hidden>Paste</button>
   </div>
 </dialog>
-<script src="term.js?v=20261121-agy"></script>
+<script src="term.js?v=20261121-stash"></script>
 </body>
 </html>

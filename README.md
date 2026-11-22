@@ -274,6 +274,27 @@ browser ─► Cloudflare Access (login) ─► cloudflared tunnel ─► Caddy 
 * `server.mjs` is zero-dependency Node. It fails closed: until `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD` are set
   in `~/.config/tmux-web/env`, every request gets 503.
 
+## Stash and fork (Claude and Gemini sessions)
+
+A Claude or Gemini card's **⋯** (and the terminal page's commands menu) offers:
+
+- **Fork**: a new session `<name>-fork` in the same folder on a branch of the conversation, opened at once; the original is left
+  as it is. Claude: `claude --resume <id> --fork-session …`. agy has no such flag: it opens the conversation
+  (`agy --conversation <id> …`) and is sent `/fork` (what agy itself suggests when one conversation is open twice). Until a forked
+  Claude writes its own transcript (with its first message) the Read view shows the conversation it came from.
+- **Stash** (tap twice): the agent is told to `/exit` (Esc first when it is working or asking), and what it takes to start it again
+  is kept: name, folder, agent, conversation id, title and its flags (only `--dangerously-skip-permissions`, `--model`, `--effort`,
+  `--mode`/`--permission-mode`, `--add-dir`, `--agent` and a few more: `KEEP_FLAGS` in server.mjs). A session that held nothing else
+  (one window, one pane) is closed. **Stashed** in the list's filter shows them; **Resume** starts a new session (the old name, or
+  name-2 …) in the old folder, types `claude --resume <id> …` / `agy --conversation <id> …` into its shell and opens it.
+  **Forget** drops an entry (the conversation itself stays where Claude or agy keep it).
+
+Only a conversation with something in it can be stashed or forked; for agy only the one its process holds open (never the
+folder's last one as a guess). API: `POST /api/sessions/:id/stash|fork { instance }`, `GET /api/stash`,
+`POST /api/stash/:sid/resume`, `DELETE /api/stash/:sid`. The list is `TMUX_WEB_STASH` (default
+`~/.local/state/tmux-web/stash.json`), one per account; an entry is seen by whoever has full access to its owner's sessions.
+`TMUX_WEB_CLAUDE_BIN` / `TMUX_WEB_AGY_BIN` name what is typed (default `claude` / `agy`).
+
 ## Install
 
 Requirements: Linux with systemd user services, tmux 3.x, Node 20+, [ttyd](https://github.com/tsl0922/ttyd) 1.7+, [Caddy](https://caddyserver.com) 2.x

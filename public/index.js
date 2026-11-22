@@ -93,6 +93,7 @@
     { key: 'claude', label: 'Claude', glyph: '✻' },
     { key: 'gemini', label: 'Gemini', glyph: '✦' },
     { key: 'shell', label: 'Terminal', glyph: '›' },
+    { key: 'stashed', label: 'Stashed', glyph: '⏸' }, // not a kind of session: the stash list (api/stash) in place of the sessions
   ];
   const kindOf = (s) => s.agent || (s.claude ? 'claude' : 'shell');
   let kindFilter = 'all';
@@ -252,20 +253,33 @@
       $closeDialog.showModal();
       $closeCancel.focus();
     });
+    // Claude or Gemini: ⋯ offers Fork (a new session on a branch of the conversation) and Stash (quit it, keep it to resume)
+    const agentHere = !!AGENTS[kind] && s.access === 'full';
+    const more = el('button', 'session-more');
+    more.type = 'button';
+    more.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
+    more.title = `Fork or stash: ${s.name}`;
+    more.setAttribute('aria-label', more.title);
+    more.setAttribute('aria-haspopup', 'menu');
+    more.setAttribute('aria-expanded', 'false');
+    more.addEventListener('click', (event) => { event.stopPropagation(); openCardMenu(more, s); });
     if (s.access === 'view') li.append(a); // somebody else's session: look, don't touch
-    else { actions.append(...(sharable ? [share] : []), rename, close); li.append(a, actions); }
+    else { actions.append(...(agentHere ? [more] : []), ...(sharable ? [share] : []), rename, close); li.append(a, actions); }
     li.classList.toggle('shareable', sharable && s.access !== 'view');
+    li.classList.toggle('forkable', agentHere);
     return li;
   }
 
   function render(data) {
     latestData = data;
-    const json = JSON.stringify({ data, previewLines, kindFilter, who: me?.email, sharePeople: me?.sharePeople });
+    if (kindFilter === 'stashed' && !stash.length) kindFilter = 'all'; // the last one resumed or forgotten: back to the sessions
+    const json = JSON.stringify({ data, stash, previewLines, kindFilter, who: me?.email, sharePeople: me?.sharePeople });
     if (json === lastJson) return;
     lastJson = json;
     $listTitle.textContent = data.sessions.length ? `${data.sessions.length} ${data.sessions.length === 1 ? 'session' : 'sessions'}` : 'Sessions';
     renderKinds(data.sessions);
     $list.replaceChildren();
+    if (kindFilter === 'stashed') { renderStash(data.now); return; }
     if (!data.sessions.length) {
       const li = el('li', 'empty');
       li.textContent = 'No tmux sessions yet. Create one above to get started.';
@@ -294,9 +308,9 @@
     if (latestData) render(latestData);
   }
   function renderKinds(sessions) {
-    const count = { all: sessions.length, claude: 0, gemini: 0, shell: 0 };
+    const count = { all: sessions.length, claude: 0, gemini: 0, shell: 0, stashed: stash.length };
     for (const s of sessions) count[kindOf(s)]++;
-    const kinds = ['claude', 'gemini', 'shell'].filter((k) => count[k] > 0).length;
+    const kinds = ['claude', 'gemini', 'shell', 'stashed'].filter((k) => count[k] > 0).length;
     $kindFilter.hidden = kinds < 2 && kindFilter === 'all';
     $listTitle.classList.toggle('with-kinds', !$kindFilter.hidden);
     if ($kindFilter.hidden) { $kindFilter.replaceChildren(); return; }
@@ -306,10 +320,136 @@
       if (k.glyph) b.append(el('span', 'kind-glyph', k.glyph));
       b.append(document.createTextNode(k.label), el('span', 'count', String(count[k.key])));
       b.setAttribute('aria-pressed', String(kindFilter === k.key));
-      b.title = k.key === 'all' ? 'Every session' : k.key === 'shell' ? 'Sessions running neither Claude nor Gemini' : `Sessions running ${k.label}`;
+      b.title = k.key === 'all' ? 'Every session' : k.key === 'shell' ? 'Sessions running neither Claude nor Gemini' : k.key === 'stashed' ? 'Claude and Gemini sessions set aside: resume one when you want it' : `Sessions running ${k.label}`;
       b.addEventListener('click', () => setKind(kindFilter === k.key && k.key !== 'all' ? 'all' : k.key));
       return b;
     }));
+  }
+
+  // ---- fork and stash (api/sessions/:id/fork|stash, api/stash): the ⋯ menu of a Claude or Gemini card, and the Stashed list
+  let stash = [];
+  const $cardMenu = el('div', 'card-menu');
+  $cardMenu.setAttribute('role', 'menu');
+  $cardMenu.hidden = true;
+  document.body.append($cardMenu);
+  let menuFor = null;
+  const openTerm = (s) => location.assign(`term.html?s=${encodeURIComponent(s.name)}&id=${encodeURIComponent(s.id)}&instance=${encodeURIComponent(s.instance)}`);
+  const errorOf = async (res) => { try { return (await res.json()).error || `HTTP ${res.status}`; } catch { return `HTTP ${res.status}`; } };
+  const post = (url, body = {}, method = 'POST') => fetch(url, { method, credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  function closeCardMenu() {
+    if ($cardMenu.hidden) return;
+    $cardMenu.hidden = true;
+    menuFor?.setAttribute('aria-expanded', 'false');
+    menuFor = null;
+  }
+  function menuItem(label, sub, run) {
+    const b = el('button', null);
+    b.type = 'button';
+    b.setAttribute('role', 'menuitem');
+    b.append(el('b', null, label), el('span', null, sub));
+    b.addEventListener('click', () => run(b));
+    return b;
+  }
+  const say = (b, label, sub) => { b.firstChild.textContent = label; b.lastChild.textContent = sub; };
+  function openCardMenu(button, s) {
+    if (menuFor === button) { closeCardMenu(); return; }
+    closeCardMenu();
+    const who = AGENTS[kindOf(s)].label;
+    let armed = false;
+    $cardMenu.replaceChildren(
+      menuItem('Fork', `A new session on a copy of this ${who} conversation`, async (b) => {
+        if (b.disabled) return;
+        b.disabled = true;
+        say(b, 'Forking…', kindOf(s) === 'gemini' ? 'Starting agy, then /fork (a few seconds)' : 'Starting Claude');
+        const res = await post(`api/sessions/${encodeURIComponent(s.id)}/fork`, { instance: s.instance }).catch(() => null);
+        if (res?.ok) { openTerm(await res.json()); return; }
+        b.disabled = false;
+        say(b, 'Fork failed', res ? await errorOf(res) : 'No connection');
+      }),
+      menuItem('Stash', `Quit ${who} here and keep it under Stashed`, async (b) => {
+        if (b.disabled) return;
+        if (!armed) { armed = true; b.classList.add('armed'); say(b, 'Tap again to stash', `${who} is told to /exit (Esc first if it is working)`); return; }
+        b.disabled = true;
+        say(b, 'Stashing…', `Waiting for ${who} to quit`);
+        const res = await post(`api/sessions/${encodeURIComponent(s.id)}/stash`, { instance: s.instance }).catch(() => null);
+        if (res?.ok) { closeCardMenu(); await load(); return; }
+        b.disabled = false;
+        armed = false;
+        b.classList.remove('armed');
+        say(b, 'Stash failed', res ? await errorOf(res) : 'No connection');
+      }),
+    );
+    menuFor = button;
+    button.setAttribute('aria-expanded', 'true');
+    $cardMenu.hidden = false;
+    const r = button.getBoundingClientRect();
+    const w = $cardMenu.offsetWidth;
+    $cardMenu.style.left = `${Math.max(8, Math.min(r.right - w, document.documentElement.clientWidth - w - 8)) + scrollX}px`;
+    $cardMenu.style.top = `${r.bottom + 6 + scrollY}px`;
+    $cardMenu.querySelector('button')?.focus({ preventScroll: true });
+  }
+  document.addEventListener('pointerdown', (e) => { if (!$cardMenu.hidden && !$cardMenu.contains(e.target) && e.target.closest?.('.session-more') !== menuFor) closeCardMenu(); }, true);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$cardMenu.hidden) { const back = menuFor; closeCardMenu(); back?.focus(); } });
+  async function loadStash() {
+    try {
+      const res = await fetch('api/stash', { cache: 'no-store', credentials: 'same-origin' });
+      if (res.ok) stash = (await res.json()).stash || [];
+    } catch { /* keep the last list */ }
+  }
+  function renderStash(now) {
+    if (!stash.length) {
+      const li = el('li', 'empty');
+      li.textContent = 'Nothing stashed. Stash a Claude or Gemini session from its ⋯ menu to set it aside and resume it later.';
+      $list.append(li);
+      return;
+    }
+    for (const e of stash) {
+      const li = el('li', `session-card stash-card kind-${e.agent}`);
+      const box = el('div', `card kind-${e.agent}`);
+      const row = el('div', 'row');
+      row.append(el('span', 'name', e.name));
+      const meta = el('div', 'meta');
+      meta.append(agentTag(e.agent));
+      if (me?.multiUser && e.owner && e.owner.email !== me.email) meta.append(el('span', 'owner-tag', e.owner.name));
+      meta.append(el('span', null, `Stashed ${ago(Math.max(0, now - e.at)).toLowerCase()}`));
+      box.append(row, meta);
+      if (e.title) box.append(el('div', 'stash-title', e.title));
+      const where = el('div', 'where');
+      where.append(el('b', null, e.path));
+      box.append(where);
+      const cmd = el('code', 'stash-cmd', e.command);
+      cmd.title = 'What Resume types into the new session';
+      box.append(cmd);
+      const actions = el('div', 'session-actions');
+      const resume = el('button', 'session-resume', 'Resume');
+      resume.type = 'button';
+      resume.title = `Resume ${e.name} in a new session and open it`;
+      resume.addEventListener('click', async () => {
+        if (resume.disabled) return;
+        resume.disabled = true;
+        resume.textContent = 'Starting…';
+        const res = await post(`api/stash/${e.id}/resume`).catch(() => null);
+        if (res?.ok) { openTerm(await res.json()); return; }
+        resume.disabled = false;
+        resume.textContent = 'Resume';
+        $notice.textContent = `Could not resume ${e.name}: ${res ? await errorOf(res) : 'no connection'}`;
+        $notice.hidden = false;
+      });
+      const forget = el('button', 'session-close', 'Forget');
+      forget.type = 'button';
+      forget.title = 'Drop it from this list (the conversation itself stays where Claude or agy keep it)';
+      let armed = false;
+      forget.addEventListener('click', async () => {
+        if (!armed) { armed = true; forget.textContent = 'Sure?'; setTimeout(() => { armed = false; forget.textContent = 'Forget'; }, 4000); return; }
+        forget.disabled = true;
+        const res = await post(`api/stash/${e.id}`, {}, 'DELETE').catch(() => null);
+        if (res?.ok || res?.status === 404) { stash = stash.filter((x) => x.id !== e.id); if (latestData) { lastJson = ''; render(latestData); } return; }
+        forget.disabled = false;
+      });
+      actions.append(resume, forget);
+      li.append(box, actions);
+      $list.append(li);
+    }
   }
 
   function saveSelection() {
@@ -1336,7 +1476,7 @@
       if (!accountUsable()) return;
       if (meStatus !== 200) throw new Error(`HTTP ${meStatus}`);
       const query = me.canViewOthers ? `?${[...selected].map((v) => `owner=${encodeURIComponent(v)}`).join('&')}` : '';
-      const res = await fetch(`api/sessions${query}`, { cache: 'no-store', credentials: 'same-origin' });
+      const [res] = await Promise.all([fetch(`api/sessions${query}`, { cache: 'no-store', credentials: 'same-origin' }), loadStash()]);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (request !== loadRequest) return;
