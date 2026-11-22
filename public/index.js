@@ -950,6 +950,11 @@
   const shortWhen = (t) => { const d = new Date(t * 1000); return d.toLocaleString([], { weekday: 'short', hour: 'numeric', ...(d.getMinutes() ? { minute: '2-digit' } : {}) }); };
   const axisMoney = (v) => (v >= 1000 ? `$${+(v / 1000).toFixed(1)}k` : `$${+v.toFixed(2)}`);
 
+  function setSpendOpen(open) {
+    $spendCard.classList.toggle('folded', !open);
+    sp.more.setAttribute('aria-expanded', String(open));
+    sp.more.title = open ? 'Hide the chart and the list' : 'Show the chart, the list and the mix';
+  }
   function buildSpend() {
     const head = el('div', 'sp-head');
     const title = el('h3', null, 'Spend');
@@ -976,7 +981,17 @@
       });
       sp.seg.append(b);
     }
-    head.append(title, sp.seg);
+    // folded by default: the head and the tiles only; Details opens the chart, the list and the mix (remembered here)
+    sp.more = el('button', 'sp-more');
+    sp.more.type = 'button';
+    sp.more.setAttribute('aria-controls', 'spend-body');
+    sp.more.append(el('span', null, 'Details'), svgEl('svg', { viewBox: '0 0 12 12', 'aria-hidden': 'true' }));
+    sp.more.lastChild.append(svgEl('path', { d: 'M3 4.5 6 7.5 9 4.5' }));
+    sp.more.addEventListener('click', () => {
+      setSpendOpen($spendCard.classList.contains('folded'));
+      try { localStorage.setItem('tmuxweb.spendOpen', $spendCard.classList.contains('folded') ? '0' : '1'); } catch { /* private mode */ }
+    });
+    head.append(title, sp.seg, sp.more);
     sp.tiles = el('div', 'sp-tiles');
     sp.plot = el('div', 'sp-plot');
     sp.plot.tabIndex = 0;
@@ -993,9 +1008,13 @@
     sp.list = el('ol', 'sp-list');
     sp.mix = el('div', 'sp-mix');
     const body = el('div', 'sp-body'); // chart, list, mix: one column, or the list beside the other two on a wide screen
+    body.id = 'spend-body';
     body.append(main, sp.list, sp.mix);
     sp.note = el('p', 'sp-note');
     $spendCard.append(head, sp.tiles, body, sp.note);
+    let open = false;
+    try { open = localStorage.getItem('tmuxweb.spendOpen') === '1'; } catch { /* private mode */ }
+    setSpendOpen(open);
     const at = (e) => {
       if (!chart) return -1;
       const r = sp.plot.getBoundingClientRect();
