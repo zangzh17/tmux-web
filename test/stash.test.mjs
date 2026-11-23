@@ -71,12 +71,20 @@ done
     assert.equal(list.length, 1);
     assert.equal(list[0].name, 'gem');
     assert.equal(list[0].command, `${fake} --conversation ${conv} --dangerously-skip-permissions --model 'Gemini 4 Neon'`);
+    // rename (the name Resume will use) and fork from the stash (a new session; the entry stays)
+    assert.equal((await api.request('PATCH', `/api/stash/${list[0].id}`, {}, { name: 'bad/name' })).status, 400);
+    assert.equal((await api.request('PATCH', `/api/stash/${list[0].id}`, {}, { name: 'gem two' })).status, 200);
+    const sf = await api.request('POST', `/api/stash/${list[0].id}/fork`, {}, {});
+    assert.equal(sf.status, 201, JSON.stringify(sf.body));
+    assert.deepEqual([sf.body.name, sf.body.forked], ['gem two-fork', true]);
+    list = (await api.request('GET', '/api/stash')).body.stash;
+    assert.deepEqual(list.map((e) => e.name), ['gem two'], 'the entry stays, renamed');
     const resumed = await api.request('POST', `/api/stash/${list[0].id}/resume`, {}, {});
     assert.equal(resumed.status, 201, JSON.stringify(resumed.body));
-    assert.equal(resumed.body.name, 'gem');
+    assert.equal(resumed.body.name, 'gem two');
     await delay(500);
     assert.equal(api.tmux('display-message', '-p', '-t', resumed.body.id, '#{pane_current_path}'), work);
-    assert.equal(fs.readFileSync(args, 'utf8').trim().split('\n').length, 3, 'started, forked, resumed');
+    assert.equal(fs.readFileSync(args, 'utf8').trim().split('\n').length, 4, 'started, forked, forked from the stash, resumed');
     list = (await api.request('GET', '/api/stash')).body.stash;
     assert.equal(list.length, 0);
     assert.equal((await api.request('POST', `/api/stash/${'0'.repeat(12)}/resume`, {}, {})).status, 404);

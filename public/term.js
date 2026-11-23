@@ -733,10 +733,24 @@
     mode = null;
     $textOutput.replaceChildren();
     $textTop.hidden = true;
+    freezeTerminal(true);
     $textDialog.showModal();
     $textScroll.scrollTop = 0;
     document.getElementById('text-done').focus({ preventScroll: true });
     void populate();
+  }
+  // Under the Read view the terminal keeps its size: the phone keyboard going up and down (tapping the message box, Send)
+  // resized the pane each time, agy/Claude redrew the whole screen just as the message was pasted and its Enter came, and that
+  // Enter was lost now and then. The frame is held at its height while the view is open and laid out again when it closes.
+  function freezeTerminal(on) {
+    if (on) {
+      const h = frame.getBoundingClientRect().height;
+      if (h > 50) frame.style.height = `${Math.round(h)}px`;
+      return;
+    }
+    if (!frame.style.height) return;
+    frame.style.height = '';
+    requestAnimationFrame(layoutTerminal);
   }
 
   // -- talking to Claude: a composer under the conversation, polling for the answer, and a few raw keys
@@ -1091,6 +1105,7 @@
   // under the status bar, out of reach.
   $textDialog.addEventListener('scroll', () => { if ($textDialog.scrollTop) $textDialog.scrollTop = 0; });
   $textDialog.addEventListener('close', () => {
+    freezeTerminal(false);
     prefs.set('view', 'term');
     generation++;
     mode = null;
@@ -2152,7 +2167,7 @@
   };
   function layoutTerminal() {
     const term = w?.term;
-    if (!term || !term.options) return;
+    if (!term || !term.options || frame.style.height) return; // held while the Read view is open (freezeTerminal)
     const app = document.getElementById('app');
     const screen = w.document.querySelector('.xterm-screen');
     const ratio = screen && term.rows && term.options.fontSize ? screen.getBoundingClientRect().height / term.rows / term.options.fontSize : 1.32; // cell height per px of font
@@ -2178,7 +2193,7 @@
   function scheduleCheck(delay) { clearTimeout(checkTimer); checkTimer = setTimeout(checkCursor, delay); }
   function checkCursor() {
     const term = w?.term;
-    if (!term?.buffer || !document.getElementById('app').classList.contains('compact') || !cursorOnRule(term)) return;
+    if (!term?.buffer || frame.style.height || !document.getElementById('app').classList.contains('compact') || !cursorOnRule(term)) return;
     if (layoutFixes === 0) {
       layoutFixes = 1;
       term.resize(term.cols, Math.max(2, term.rows - 1));

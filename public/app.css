@@ -102,12 +102,13 @@ h1 { margin: 0; font-size: 1.25rem; line-height: 1.25; letter-spacing: -0.01em; 
 .card-menu span { color: var(--muted); font-size: 0.76rem; line-height: 1.35; }
 .card-menu button.armed b { color: #dc2626; }
 @media (prefers-color-scheme: dark) { .card-menu button.armed b { color: #ff899d; } }
-.stash-card .row { padding-right: 150px; }
+.stash-card .row { padding-right: 140px; }
 .session-resume { min-height: 34px; padding: 0 12px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border)); border-radius: 9px; background: color-mix(in srgb, var(--accent) 12%, var(--surface)); color: var(--accent); font: 650 0.82rem/1 system-ui, sans-serif; cursor: pointer; touch-action: manipulation; }
 .session-resume:disabled { opacity: 0.6; cursor: progress; }
 .stash-title { margin-top: 6px; font-size: 0.9rem; font-weight: 550; }
 .stash-cmd { display: block; margin-top: 8px; padding: 6px 8px; overflow: hidden; border-radius: 8px; background: var(--peek-bg); color: var(--muted); font: 0.72rem/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
-.kind-filter .kind-stashed .kind-glyph { color: var(--muted); font-size: 0.75rem; }
+.kind-filter .kind-stashed .kind-glyph, .kind-filter .kind-active .kind-glyph { color: var(--muted); font-size: 0.7rem; }
+.kind-filter .kind-active .kind-glyph { color: var(--ok); font-size: 0.55rem; }
 .session-actions { position: absolute; z-index: 1; top: 12px; right: 12px; display: flex; gap: 6px; }
 .session-rename, .session-share { display: inline-flex; align-items: center; justify-content: center; width: 34px; min-height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--muted); cursor: pointer; touch-action: manipulation; }
 .session-rename svg, .session-share svg { width: 17px; height: 17px; }

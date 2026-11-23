@@ -1320,6 +1320,7 @@ async function sessionInput(req, id) {
       await new Promise((resolve) => setTimeout(resolve, 700));
       const rows = promptRows(await tmux(['capture-pane', '-p', '-t', pane]).catch(() => ''));
       if (!rows || !normBox(rows.join(' ')).includes(head)) break;
+      console.log(`[tmux-web] input: the message was still in ${agentOf(command)}'s box, Enter pressed again (${i + 1})`);
       await tmux(['send-keys', '-t', pane, 'Enter']);
     }
   });
@@ -1333,6 +1334,7 @@ async function sessionInput(req, id) {
 //   GET  /api/stash -> { stash: [...] }                         what this person may resume (accessFor 'full' on its owner)
 //   POST /api/stash/:sid/resume {} -> { id, instance, name }     a new tmux session (the old name, or name-2 …) in the old
 //        folder, typing `claude --resume <id> …` or `agy --conversation <id> …` into its shell; the entry is then dropped
+//   PATCH /api/stash/:sid { name }, POST /api/stash/:sid/fork {}  rename it; branch it into a new session (the entry stays)
 //   DELETE /api/stash/:sid {} -> { ok }                          forget it (the conversation itself stays where it was)
 //   POST /api/sessions/:id/fork { instance } -> { id, instance, name, forked }   the conversation branched into a new session
 //        <name>-fork in the same folder, the original untouched: Claude by `--resume <id> --fork-session`; agy has no flag,
@@ -1505,6 +1507,27 @@ async function resumeStash(req, user, sid) {
     return { status: 201, body: { ...s, owner: ownerOf(entry.owner || user.email) } };
   });
 }
+// PATCH /api/stash/:sid { name } -> { ok, name }: the name Resume will use (taken by then: name-2 …)
+async function renameStash(req, user, sid) {
+  const input = await readMutation(req);
+  if (input.status) return input;
+  const { name } = input.data;
+  if (typeof name !== 'string' || !DISPLAY_NAME.test(name)) return { status: 400, body: { error: 'invalid session name' } };
+  return stashLocked(() => {
+    if (!stashFor(user).some((e) => e.id === sid)) return { status: 404, body: { error: 'not in the stash' } };
+    writeStash(readStash().map((e) => (e.id === sid ? { ...e, name } : e)));
+    return { status: 200, body: { ok: true, name } };
+  });
+}
+// POST /api/stash/:sid/fork {} -> { id, instance, name, forked }: a new session on a branch of a stashed conversation; the
+// entry stays in the stash as it was
+async function forkStash(req, user, sid) {
+  const input = await readMutation(req);
+  if (input.status) return input;
+  const entry = stashFor(user).find((e) => e.id === sid);
+  if (!entry) return { status: 404, body: { error: 'not in the stash' } };
+  return launchFork(entry, user);
+}
 async function forgetStash(req, user, sid) {
   const input = await readMutation(req);
   if (input.status) return input;
@@ -1521,6 +1544,10 @@ async function forkSession(req, user, id) {
   if (typeof instance !== 'string' || !SESSION_INSTANCE.test(instance)) return { status: 400, body: { error: 'invalid session identity' } };
   const f = await agentFacts(id, instance);
   if (f.status) return f;
+  return launchFork(f, user);
+}
+// f: { name, cwd, agent, conversation, flags }, from a live session (agentFacts) or a stash entry (left as it is)
+async function launchFork(f, user) {
   const s = await launchIn(await freeName(`${f.name}-fork`), f.cwd, launchLine(f.agent, f.conversation, f.flags, true), multiUser() ? user.email : '');
   let forked = f.agent === 'claude';
   if (f.agent === 'gemini') {
@@ -2310,11 +2337,13 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, await changeSession(req, id));
     }
     if (pathname === '/api/stash' && req.method === 'GET') return sendJson(res, { status: 200, body: { stash: stashFor(user).sort((a, b) => b.at - a.at).map(stashView) } });
-    const stashed = /^\/api\/stash\/([^/]+)(\/resume)?$/.exec(pathname);
+    const stashed = /^\/api\/stash\/([^/]+)(?:\/(resume|fork))?$/.exec(pathname);
     if (stashed) {
-      if (req.method !== (stashed[2] ? 'POST' : 'DELETE')) return send(res, 405, 'method not allowed');
-      if (!STASH_ID.test(stashed[1])) return sendJson(res, { status: 404, body: { error: 'not in the stash' } });
-      return sendJson(res, stashed[2] ? await resumeStash(req, user, stashed[1]) : await forgetStash(req, user, stashed[1]));
+      const [, sid, act] = stashed;
+      if (!(act ? ['POST'] : ['PATCH', 'DELETE']).includes(req.method)) return send(res, 405, 'method not allowed');
+      if (!STASH_ID.test(sid)) return sendJson(res, { status: 404, body: { error: 'not in the stash' } });
+      if (act) return sendJson(res, act === 'resume' ? await resumeStash(req, user, sid) : await forkStash(req, user, sid));
+      return sendJson(res, req.method === 'PATCH' ? await renameStash(req, user, sid) : await forgetStash(req, user, sid));
     }
     if (pathname === '/api/uploads' && req.method === 'POST') return sendJson(res, await startUpload(req, user));
     const upload = /^\/api\/uploads\/([^/]+)(\/done)?$/.exec(pathname);

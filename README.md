@@ -285,15 +285,20 @@ A Claude or Gemini card's **⋯** (and the terminal page's commands menu) offers
 - **Stash** (tap twice): the agent is told to `/exit` (Esc first when it is working or asking), and what it takes to start it again
   is kept: name, folder, agent, conversation id, title and its flags (only `--dangerously-skip-permissions`, `--model`, `--effort`,
   `--mode`/`--permission-mode`, `--add-dir`, `--agent` and a few more: `KEEP_FLAGS` in server.mjs). A session that held nothing else
-  (one window, one pane) is closed. **Stashed** in the list's filter shows them; **Resume** starts a new session (the old name, or
-  name-2 …) in the old folder, types `claude --resume <id> …` / `agy --conversation <id> …` into its shell and opens it.
-  **Forget** drops an entry (the conversation itself stays where Claude or agy keep it).
+  (one window, one pane) is closed. The list then has two tabs, **Active** (the sessions) and **Stashed**; **Resume** starts a new
+  session (the old name, or name-2 …) in the old folder, types `claude --resume <id> …` / `agy --conversation <id> …` into its
+  shell and opens it. A stashed one's **⋯** has **Fork** (a new session on a branch of it; the entry stays as it is), **Rename**
+  (the name Resume will use) and **Forget** (two taps; the conversation itself stays where Claude or agy keep it).
 
 Only a conversation with something in it can be stashed or forked; for agy only the one its process holds open (never the
 folder's last one as a guess). API: `POST /api/sessions/:id/stash|fork { instance }`, `GET /api/stash`,
-`POST /api/stash/:sid/resume`, `DELETE /api/stash/:sid`. The list is `TMUX_WEB_STASH` (default
+`POST /api/stash/:sid/resume|fork`, `PATCH /api/stash/:sid { name }`, `DELETE /api/stash/:sid`. The list is `TMUX_WEB_STASH` (default
 `~/.local/state/tmux-web/stash.json`), one per account; an entry is seen by whoever has full access to its owner's sessions.
 `TMUX_WEB_CLAUDE_BIN` / `TMUX_WEB_AGY_BIN` name what is typed (default `claude` / `agy`).
+
+While the Read view is open the terminal under it keeps its size (the phone keyboard going up and down resized the pane, the
+agent redrew its screen just as a message's Enter arrived, and that Enter was lost now and then); it is laid out again when the
+view closes. If a message is still in the agent's box after its Enter, the API presses Enter again (at most twice) and logs it.
 
 ## Install
 
