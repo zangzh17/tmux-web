@@ -1818,6 +1818,7 @@
     { name: 'Send now', hint: 'Typed text, not queued', text: '\x1bm', title: 'Alt+M: send what is typed at once instead of queueing it', only: 'gemini' },
     // either agent: branch the conversation into a new session (and open it), or quit and keep it under Stashed on the list
     { name: 'Fork', hint: 'New session, same conversation', action: 'fork', title: 'A new session on a branch of this conversation; this one is left as it is', only: 'agent' },
+    { name: 'Switch', hint: 'To the other agent', hints: { claude: 'To agy, with the conversation', gemini: 'To Claude, with the conversation' }, action: 'switch', title: 'Quit this agent and start the other one here, given the conversation so far', only: 'agent' },
     { name: 'Stash', hint: 'Quit, resume it later', action: 'stash', title: 'Quit the agent here and keep it under Stashed on the session list', only: 'agent' },
     { name: 'Paste', hint: 'From the clipboard', paste: true, title: 'Paste the clipboard into the terminal' },
     { name: 'Ctrl-C', hint: 'Interrupt', hints: { gemini: 'Go back / dismiss' }, text: '\x03', title: 'Ctrl+C' },
@@ -2078,10 +2079,15 @@
   async function agentAction(action, row) {
     const hint = row.querySelector('.c-hint');
     if (row.disabled) return;
-    if (action === 'stash' && !row.dataset.armed) { row.dataset.armed = '1'; hint.textContent = 'Tap again: it quits here'; setTimeout(() => { delete row.dataset.armed; }, 5000); return; }
+    if (action !== 'fork' && !row.dataset.armed) {
+      row.dataset.armed = '1';
+      hint.textContent = action === 'stash' ? 'Tap again: it quits here' : `Tap again: ${agentHere === 'gemini' ? 'agy' : 'Claude'} quits, ${agentHere === 'gemini' ? 'Claude' : 'agy'} starts`;
+      setTimeout(() => { delete row.dataset.armed; }, 5000);
+      return;
+    }
     delete row.dataset.armed;
     row.disabled = true;
-    hint.textContent = action === 'fork' ? (agentHere === 'gemini' ? 'Starting agy, then /fork…' : 'Starting Claude…') : 'Waiting for it to quit…';
+    hint.textContent = action === 'fork' ? (agentHere === 'gemini' ? 'Starting agy, then /fork…' : 'Starting Claude…') : action === 'switch' ? 'Writing out the conversation…' : 'Waiting for it to quit…';
     let res = null;
     try {
       res = await fetch(`api/sessions/${encodeURIComponent(sessionId)}/${action}`, {
@@ -2091,6 +2097,7 @@
     if (res?.ok) {
       const body = await res.json();
       if (action === 'fork') { const u = new URL(location.href); u.search = ''; u.searchParams.set('s', body.name); u.searchParams.set('id', body.id); u.searchParams.set('instance', body.instance); location.assign(u.href); }
+      else if (action === 'switch') location.reload(); // the same session, now with the other agent: the page finds it again
       else location.assign(new URL('./', location.href).href); // back to the list, where it is under Stashed
       return;
     }

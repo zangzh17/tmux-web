@@ -290,7 +290,15 @@ A Claude or Gemini card's **⋯** (and the terminal page's commands menu) offers
   shell and opens it. A stashed one's **⋯** has **Fork** (a new session on a branch of it; the entry stays as it is), **Rename**
   (the name Resume will use) and **Forget** (two taps; the conversation itself stays where Claude or agy keep it).
 
-Only a conversation with something in it can be stashed or forked; for agy only the one its process holds open (never the
+- **Switch to Gemini / Claude** (tap twice): the same session goes on with the other agent. The conversation so far is written
+  out as Markdown (`TMUX_WEB_HANDOFF`, default `~/.local/state/tmux-web/handoff/<time>-<name>-<agent>.md`, the newest ~600 KB,
+  with the original record's path and how to resume it there; agy's own record is SQLite + protobuf, which Claude cannot read),
+  the agent is told to `/exit`, and the other one is started in the same pane's shell with a first message to read that file and
+  say where things stand: `claude [--dangerously-skip-permissions] '<message>'` / `agy [--dangerously-skip-permissions] -i
+  '<message>'` (skipping permissions only if the old one did). Refused when the agent is the pane's own program (no shell to
+  come back to). `POST /api/sessions/:id/switch { instance }`. The terminal page reloads; from the list it opens.
+
+Only a conversation with something in it can be stashed, forked or switched; for agy only the one its process holds open (never the
 folder's last one as a guess). API: `POST /api/sessions/:id/stash|fork { instance }`, `GET /api/stash`,
 `POST /api/stash/:sid/resume|fork`, `PATCH /api/stash/:sid { name }`, `DELETE /api/stash/:sid`. The list is `TMUX_WEB_STASH` (default
 `~/.local/state/tmux-web/stash.json`), one per account; an entry is seen by whoever has full access to its owner's sessions.

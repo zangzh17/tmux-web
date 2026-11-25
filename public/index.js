@@ -365,6 +365,19 @@
     const who = AGENTS[kindOf(s)].label;
     let armed = false;
     showMenu(button, [forkItem(`api/sessions/${encodeURIComponent(s.id)}/fork`, kindOf(s), { instance: s.instance }),
+      menuItem(`Switch to ${kindOf(s) === 'claude' ? 'Gemini' : 'Claude'}`, `This session goes on with ${kindOf(s) === 'claude' ? 'agy' : 'Claude'}, given the conversation so far`, async (b) => {
+        if (b.disabled) return;
+        const other = kindOf(s) === 'claude' ? 'agy' : 'Claude';
+        if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.classList.add('armed'); say(b, 'Tap again to switch', `${who} is told to /exit (Esc first if it is working), then ${other} starts here and reads the conversation`); return; }
+        b.disabled = true;
+        say(b, 'Switching…', `Writing out the conversation, waiting for ${who} to quit`);
+        const res = await post(`api/sessions/${encodeURIComponent(s.id)}/switch`, { instance: s.instance }).catch(() => null);
+        if (res?.ok) { openTerm({ ...(await res.json()), name: s.name }); return; }
+        b.disabled = false;
+        delete b.dataset.armed;
+        b.classList.remove('armed');
+        say(b, 'Switch failed', res ? await errorOf(res) : 'No connection');
+      }),
       menuItem('Stash', `Quit ${who} here and keep it under Stashed`, async (b) => {
         if (b.disabled) return;
         if (!armed) { armed = true; b.classList.add('armed'); say(b, 'Tap again to stash', `${who} is told to /exit (Esc first if it is working)`); return; }

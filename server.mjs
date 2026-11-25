@@ -1408,22 +1408,23 @@ async function agentFacts(id, instance) {
   if (!agent || !/^%\d+$/.test(pane || '')) return { status: 409, body: { error: 'neither Claude nor Gemini runs in this session' } };
   let conversation = null;
   let title = '';
+  let record = ''; // where the agent keeps the conversation
   if (agent === 'claude') {
     const rec = await paneConversation(pane, +panePid);
     conversation = rec?.sessionId || null;
     const file = conversation ? await transcriptOf(conversation, cwd).catch(() => null) : null;
     if (!file) conversation = null; // nothing said yet: there is nothing to resume or branch
-    else title = spend.files.get(file)?.title || '';
+    else { title = spend.files.get(file)?.title || ''; record = file; }
   } else {
     const c = await geminiPaneConversation(+panePid, cwd);
     conversation = c && !c.guessed ? c.id : null; // only the one agy holds open: a guess (the folder's last one) could be another
     if (conversation) { try { if (!(await geminiTranscript(conversation)).items.length) conversation = null; } catch { conversation = null; } } // a fresh, empty one
-    if (conversation) title = (await geminiSummaries()).get(conversation)?.title || '';
+    if (conversation) { title = (await geminiSummaries()).get(conversation)?.title || ''; record = path.join(GEMINI_DIR, 'conversations', `${conversation}.db`); }
   }
   if (!conversation) return { status: 409, body: { error: `this ${agent === 'claude' ? 'Claude' : 'Gemini'} session has no conversation yet (nothing has been sent)` } };
   const pid = await agentProcess(+panePid, agent);
   const flags = pid ? keptFlags(await argvOf(pid), agent) : ['--dangerously-skip-permissions'];
-  return { id, instance, name, agent, pane, panePid: +panePid, cwd, single: +windows === 1 && +panes === 1, owner: owner.trim().toLowerCase(), conversation, title, flags };
+  return { id, instance, name, agent, pane, panePid: +panePid, cwd, single: +windows === 1 && +panes === 1, owner: owner.trim().toLowerCase(), conversation, title, flags, record };
 }
 // what is typed to start them (TMUX_WEB_CLAUDE_BIN, TMUX_WEB_AGY_BIN: tests point these at stand-ins)
 const CLAUDE_BIN = process.env.TMUX_WEB_CLAUDE_BIN || 'claude';
@@ -1459,13 +1460,8 @@ async function waitScreen(target, test, ms) {
   }
   return false;
 }
-async function stashSession(req, user, id) {
-  const input = await readMutation(req);
-  if (input.status) return input;
-  const { instance } = input.data;
-  if (typeof instance !== 'string' || !SESSION_INSTANCE.test(instance)) return { status: 400, body: { error: 'invalid session identity' } };
-  const f = await agentFacts(id, instance);
-  if (f.status) return f;
+// Tell the agent in f.pane to /exit (Esc first when it works or asks) and wait for it to be gone: true when it quit.
+async function quitAgent(f) {
   await serialized(f.pane, async () => {
     const screen = await tmux(['capture-pane', '-p', '-t', f.pane]).catch(() => '');
     if (SCREEN_BUSY.test(screen) || SCREEN_ASKING.test(screen) || GEMINI_ASKING.test(screen)) { await tmux(['send-keys', '-t', f.pane, 'Escape']); await pause(900); }
@@ -1474,13 +1470,21 @@ async function stashSession(req, user, id) {
     await pause(400);
     await tmux(['send-keys', '-t', f.pane, 'Enter']);
   });
-  let quit = false;
-  for (const end = Date.now() + 12_000; Date.now() < end && !quit; await pause(400)) {
+  for (const end = Date.now() + 12_000; Date.now() < end; await pause(400)) {
     const now = await tmux(['display-message', '-p', '-t', f.pane, '#{pane_id}\t#{pane_current_command}']).catch(() => '');
     const [paneNow, command] = now.replace(/\n$/, '').split('\t');
-    quit = paneNow !== f.pane || agentOf(command || '') !== f.agent;
+    if (paneNow !== f.pane || agentOf(command || '') !== f.agent) return true;
   }
-  if (!quit) return { status: 409, body: { error: `${f.agent === 'claude' ? 'Claude' : 'agy'} did not quit; nothing was stashed. Look at the session and try again.` } };
+  return false;
+}
+async function stashSession(req, user, id) {
+  const input = await readMutation(req);
+  if (input.status) return input;
+  const { instance } = input.data;
+  if (typeof instance !== 'string' || !SESSION_INSTANCE.test(instance)) return { status: 400, body: { error: 'invalid session identity' } };
+  const f = await agentFacts(id, instance);
+  if (f.status) return f;
+  if (!(await quitAgent(f))) return { status: 409, body: { error: `${f.agent === 'claude' ? 'Claude' : 'agy'} did not quit; nothing was stashed. Look at the session and try again.` } };
   const entry = {
     id: crypto.randomBytes(6).toString('hex'), name: f.name, cwd: f.cwd, agent: f.agent, conversation: f.conversation, flags: f.flags,
     title: f.title, owner: multiUser() ? (f.owner || user.email) : '', at: Math.floor(Date.now() / 1000),
@@ -1493,6 +1497,78 @@ async function stashSession(req, user, id) {
   }
   return { status: 200, body: { stash: stashView(entry), closed } };
 }
+// ---- switch: the same session goes on with the other agent (Claude <-> agy)
+//   POST /api/sessions/:id/switch { instance } -> { id, instance, name, agent, handoff }
+// The conversation so far is written out as Markdown (agy keeps its own as SQLite + protobuf, which Claude cannot read):
+// TMUX_WEB_HANDOFF (default ~/.local/state/tmux-web/handoff)/<time>-<name>-<agent>.md, the newest HANDOFF_MAX bytes of it, with
+// where the original record is and how to resume it. Then the agent is told to /exit and, in the same pane's shell, the other
+// one is started with a first message pointing at that file: `claude [--dangerously-skip-permissions] '<message>'` or
+// `agy [--dangerously-skip-permissions] -i '<message>'` (skipping permissions only if the old one did). The session stays.
+const HANDOFF_DIR = process.env.TMUX_WEB_HANDOFF || path.join(os.homedir(), '.local', 'state', 'tmux-web', 'handoff');
+const HANDOFF_MAX = 600 << 10;
+const AGENT_NAME = { claude: 'Claude', gemini: 'Gemini (agy)' };
+async function conversationItems(f) {
+  if (f.agent === 'gemini') return (await geminiTranscript(f.conversation)).items;
+  const entry = claudeEntry(f.record);
+  const run = entry.chain.then(() => advance(entry, f.record));
+  entry.chain = run.catch(() => {});
+  await run;
+  return entry.items;
+}
+function handoffMarkdown(f, items) {
+  const who = AGENT_NAME[f.agent];
+  const cut = (t, n) => (t.length > n ? `${t.slice(0, n)} …` : t);
+  const parts = items.map((it) => {
+    const when = it.ts ? ` (${it.ts.replace('T', ' ').slice(0, 16)})` : '';
+    if (it.kind === 'user') return `## User${when}\n\n${it.text}\n`;
+    if (it.kind === 'assistant') return `## ${who}${when}\n\n${it.text}\n`;
+    if (it.kind === 'command') return `## User command${when}\n\n\`${it.text}\`\n`;
+    if (it.kind === 'summary') return `## Context summary${when}\n\n${it.text}\n`;
+    if (it.kind === 'tool') return `- tool \`${it.name || 'tool'}\`: ${cut(String(it.text || '').replace(/\s+/g, ' '), 300)}`;
+    if (it.kind === 'result') return it.cleared ? '' : `  - ${it.error ? 'error' : 'result'}: ${cut(String(it.text || '').replace(/\s+/g, ' '), 300)}`;
+    return it.text ? `> ${cut(it.text, 300)}` : '';
+  }).filter(Boolean);
+  let body = parts.join('\n');
+  let dropped = '';
+  if (Buffer.byteLength(body) > HANDOFF_MAX) {
+    let keep = [];
+    let size = 0;
+    for (let i = parts.length - 1; i >= 0 && size < HANDOFF_MAX; i--) { keep.unshift(parts[i]); size += Buffer.byteLength(parts[i]) + 1; }
+    dropped = `\n_The first ${parts.length - keep.length} of ${parts.length} entries are left out (this file keeps the newest ~${HANDOFF_MAX >> 10} KB); the whole conversation is in the record above._\n`;
+    body = keep.join('\n');
+  }
+  const resume = f.agent === 'claude' ? `claude --resume ${f.conversation}` : `agy --conversation ${f.conversation}`;
+  return `# Hand-off: ${f.name}${f.title ? ` — ${f.title}` : ''}\n\n`
+    + `The conversation so far with ${who} in \`${f.cwd}\`, written out when this session switched agents.\n\n`
+    + `- Original record: \`${f.record}\`${f.agent === 'gemini' ? ' (SQLite + protobuf, agy\'s own format)' : ' (JSON lines)'}\n`
+    + `- Resume it there: \`${resume}\`\n- Written: ${new Date().toISOString()}\n${dropped}\n---\n\n${body}\n`;
+}
+async function switchSession(req, user, id) {
+  const input = await readMutation(req);
+  if (input.status) return input;
+  const { instance } = input.data;
+  if (typeof instance !== 'string' || !SESSION_INSTANCE.test(instance)) return { status: 400, body: { error: 'invalid session identity' } };
+  const f = await agentFacts(id, instance);
+  if (f.status) return f;
+  const to = f.agent === 'claude' ? 'gemini' : 'claude';
+  if ((await agentProcess(f.panePid, f.agent)) === f.panePid) return { status: 409, body: { error: 'the agent is this pane\'s own program (not started from a shell): quitting it would end the session' } };
+  // written before anything is quit: if this fails, nothing has changed
+  fs.mkdirSync(HANDOFF_DIR, { recursive: true, mode: 0o700 });
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+  const handoff = path.join(HANDOFF_DIR, `${stamp}-${f.name.replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 40)}-${f.agent}.md`);
+  fs.writeFileSync(handoff, handoffMarkdown(f, await conversationItems(f)), { mode: 0o600 });
+  if (!(await quitAgent(f))) return { status: 409, body: { error: `${f.agent === 'claude' ? 'Claude' : 'agy'} did not quit, so nothing was switched. Look at the session and try again.` } };
+  const message = `This session was just switched to you from ${AGENT_NAME[f.agent]}. Read the hand-off file ${handoff} `
+    + `(the conversation so far, newest at the end; the original record is ${f.record}). `
+    + 'Then say in a few lines where the work stands and what was about to happen next, and wait for my instruction.';
+  const skip = f.flags.includes('--dangerously-skip-permissions') ? ['--dangerously-skip-permissions'] : [];
+  const line = (to === 'claude' ? [CLAUDE_BIN, ...skip, message] : [AGY_BIN, ...skip, '-i', message]).map(shq).join(' ');
+  await pause(300);
+  await tmux(['send-keys', '-t', f.pane, '-l', line]);
+  await tmux(['send-keys', '-t', f.pane, 'Enter']);
+  return { status: 200, body: { id, instance, name: f.name, agent: to, handoff } };
+}
+
 const stashView = (e) => ({ id: e.id, name: e.name, path: tildePath(e.cwd), agent: e.agent, title: e.title || '', at: e.at, owner: e.owner ? ownerOf(e.owner) : null, command: launchLine(e.agent, e.conversation, e.flags) });
 const tildePath = (p) => { const home = os.homedir(); return p === home || String(p).startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p; };
 const stashFor = (user) => readStash().filter((e) => accessFor(user, e.owner || '', '') === 'full');
@@ -2314,10 +2390,10 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/files/view') return req.method === 'GET' ? sendJson(res, await viewFile(user, searchParams)) : send(res, 405, 'method not allowed');
     if (pathname === '/api/files/raw') return ['GET', 'HEAD'].includes(req.method) ? sendRaw(req, res, searchParams) : send(res, 405, 'method not allowed');
     // every /api/sessions/:id... route: id syntax, method, then what this person may do with that session, and only then the body
-    const sub = /^\/api\/sessions\/([^/]+)(?:\/(input|history|transcript|share|stash|fork))?$/.exec(pathname);
+    const sub = /^\/api\/sessions\/([^/]+)(?:\/(input|history|transcript|share|stash|fork|switch))?$/.exec(pathname);
     if (sub) {
       const view = sub[2];
-      const methods = ['input', 'stash', 'fork'].includes(view) ? ['POST'] : view === 'share' ? ['PUT'] : view ? ['GET'] : ['PATCH', 'DELETE'];
+      const methods = ['input', 'stash', 'fork', 'switch'].includes(view) ? ['POST'] : view === 'share' ? ['PUT'] : view ? ['GET'] : ['PATCH', 'DELETE'];
       if (!methods.includes(req.method)) return send(res, 405, 'method not allowed');
       let id;
       try { id = decodeURIComponent(sub[1]); } catch { return send(res, 400, 'invalid session id'); }
@@ -2333,6 +2409,7 @@ const server = http.createServer(async (req, res) => {
       if (view === 'input') return sendJson(res, await sessionInput(req, id));
       if (view === 'stash') return sendJson(res, await stashSession(req, user, id));
       if (view === 'fork') return sendJson(res, await forkSession(req, user, id));
+      if (view === 'switch') return sendJson(res, await switchSession(req, user, id));
       if (view) return sendJson(res, await (view === 'history' ? sessionHistory : sessionTranscript)(id, searchParams));
       return sendJson(res, await changeSession(req, id));
     }

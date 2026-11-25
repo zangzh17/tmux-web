@@ -98,3 +98,49 @@ done
     assert.equal((await api.request('POST', sessionPath(sh, 'fork'), {}, { instance: '1:2' })).status, 404);
   } finally { await api.stop(); fs.rmSync(base, { recursive: true, force: true }); }
 });
+
+test('switch: agy quits, its conversation is written out, claude starts in the same pane with that file to read', async () => {
+  const base = fs.realpathSync(fs.mkdtempSync('/tmp/tmux-web-switch-'));
+  const gem = path.join(base, 'gemini');
+  fs.mkdirSync(path.join(gem, 'presence'), { recursive: true });
+  const conv = 'cccccccc-2222-4333-8444-555555555555';
+  const lock = path.join(gem, 'presence', `${conv}.lock`);
+  fs.writeFileSync(lock, '');
+  oneMessage(gem, conv);
+  const fake = path.join(base, 'fakeagy');
+  fs.writeFileSync(fake, `#!/bin/sh\n[ "$1" = --lock ] && { exec 9<>"$2"; shift 2; }\nprintf '>\\n? for shortcuts\\n'\nwhile IFS= read -r l; do case "$l" in */exit) exit 0 ;; esac; done\n`, { mode: 0o755 });
+  const args = path.join(base, 'claude-args');
+  const claude = path.join(base, 'claude-stand-in');
+  fs.writeFileSync(claude, `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done > '${args}'\n`, { mode: 0o755 });
+  const handoffs = path.join(base, 'handoff');
+  const api = await startApi({ TMUX_WEB_GEMINI_DIR: gem, TMUX_WEB_GEMINI_COMMAND: '^fakeagy$', TMUX_WEB_CLAUDE_COMMAND: '^never$', TMUX_WEB_CLAUDE_BIN: claude, TMUX_WEB_HANDOFF: handoffs });
+  try {
+    // agy as the pane's own program: refused (quitting it would end the session)
+    const bare = api.start('bare', 'bash', '-c', `exec -a fakeagy /bin/sh '${fake}' --lock '${lock}'`);
+    await delay(400);
+    let row = (await api.request('GET', '/api/sessions')).body.sessions.find((x) => x.id === bare);
+    assert.equal((await api.request('POST', sessionPath(bare, 'switch'), {}, { instance: row.instance })).status, 409);
+    api.tmux('kill-session', '-t', bare);
+    // agy started from a shell
+    const id = api.start('sw', 'bash', '--norc', '--noprofile', '-i');
+    await delay(300);
+    api.tmux('send-keys', '-t', id, '-l', `(exec -a fakeagy /bin/sh '${fake}' --lock '${lock}' --dangerously-skip-permissions)`);
+    api.tmux('send-keys', '-t', id, 'Enter');
+    await delay(600);
+    row = (await api.request('GET', '/api/sessions')).body.sessions.find((x) => x.id === id);
+    assert.equal(row.agent, 'gemini');
+    const r = await api.request('POST', sessionPath(id, 'switch'), {}, { instance: row.instance });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.agent, 'claude');
+    const md = fs.readFileSync(r.body.handoff, 'utf8');
+    assert.match(md, /^# Hand-off: sw/);
+    assert.match(md, new RegExp(`conversations/${conv}\\.db`));
+    assert.match(md, new RegExp(`agy --conversation ${conv}`));
+    assert.match(md, /## User[^\n]*\n\nhi\n/);
+    await delay(800);
+    const argv = fs.readFileSync(args, 'utf8').trim().split('\n');
+    assert.equal(argv[0], '--dangerously-skip-permissions', 'carried over from agy');
+    assert.ok(argv[1].includes(r.body.handoff), argv[1]);
+    assert.ok((await api.request('GET', '/api/sessions')).body.sessions.some((x) => x.id === id), 'the session stays');
+  } finally { await api.stop(); fs.rmSync(base, { recursive: true, force: true }); }
+});
