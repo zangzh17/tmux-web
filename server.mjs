@@ -1038,11 +1038,15 @@ async function paneConversation(paneId, panePid) {
       const rec = JSON.parse(await fs.promises.readFile(path.join(CLAUDE_SESSIONS, n), 'utf8')); // only <pid>.json: the .key files next to them are secrets
       const pid = parseInt(n, 10);
       if (typeof rec.tmux !== 'string' || !rec.tmux.endsWith(`.${paneId}`) || !SESSION_UUID.test(rec.sessionId || '')) return;
-      if (HAS_PROC ? !(await ancestorsOf(pid)).includes(panePid) : !pidAlive(pid)) return;
-      found.push(rec);
+      const depth = HAS_PROC ? (await ancestorsOf(pid)).indexOf(panePid) : pidAlive(pid) ? 0 : -1;
+      if (depth < 0) return;
+      found.push({ rec, depth, sdk: /^sdk/.test(rec.entrypoint || '') || (rec.kind && rec.kind !== 'interactive') });
     } catch { /* unreadable, half-written or gone */ }
   }));
-  return found.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))[0] ?? null;
+  // A Claude started by the pane's Claude (a `claude -p` from one of its tools, a script it runs) inherits $TMUX and writes a
+  // record naming the same pane, newer than the real one: the pane's own Claude is the interactive one nearest the pane.
+  found.sort((a, b) => a.sdk - b.sdk || a.depth - b.depth || (b.rec.startedAt || 0) - (a.rec.startedAt || 0));
+  return found[0]?.rec ?? null;
 }
 const transcriptPaths = new Map(); // sessionId -> file, once found
 async function transcriptOf(sessionId, cwd) {

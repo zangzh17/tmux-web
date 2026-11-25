@@ -286,6 +286,36 @@ test('two Claude panes in one directory each show their own conversation, never 
   }
 });
 
+test('a claude -p started from inside the pane (newer, same pane in its record) does not take over the pane', async () => {
+  const uuidA = '44444444-4444-4444-8444-444444444444';
+  const uuidSdk = '55555555-5555-4555-8555-555555555555';
+  // the pane's own process stands for the interactive Claude; the sleep it started stands for a `claude -p` one of its tools ran
+  const idP = api.start('claudep', '-c', cwd, "sh -c 'sleep 601 & exec sleep 600'");
+  const [panePid, pane, name] = api.tmux('display-message', '-p', '-t', idP, '#{pane_pid} #{pane_id} #{session_name}').trim().split(' ');
+  let child = '';
+  for (let i = 0; i < 50 && !child; i++) {
+    try { child = fs.readFileSync(`/proc/${panePid}/task/${panePid}/children`, 'utf8').trim().split(/\s+/)[0]; } catch { /* not yet */ }
+    if (!child) await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(child, 'the stand-in child runs');
+  const record = (pid, sessionId, extra) => fs.writeFileSync(path.join(sessionsDir, `${pid}.json`),
+    JSON.stringify({ pid: +pid, sessionId, cwd, tmux: `${name}:@0.${pane}`, kind: 'interactive', ...extra }));
+  write([user('the real conversation')], `${uuidA}.jsonl`);
+  try {
+    record(panePid, uuidA, { entrypoint: 'cli', startedAt: Date.now() - 60_000 });
+    record(child, uuidSdk, { entrypoint: 'sdk-cli', startedAt: Date.now() });
+    const r = await api.request('GET', sessionPath(idP, 'transcript'));
+    assert.equal(r.status, 200); assert.equal(r.body.file, uuidA);
+    assert.equal(r.body.items.find((i) => i.kind === 'user')?.text, 'the real conversation');
+    record(child, uuidSdk, { entrypoint: 'cli', startedAt: Date.now() }); // even a nested interactive one: the nearer one is the pane's
+    assert.equal((await api.request('GET', sessionPath(idP, 'transcript'))).body.file, uuidA);
+  } finally {
+    for (const n of fs.readdirSync(sessionsDir)) fs.rmSync(path.join(sessionsDir, n), { force: true });
+    fs.rmSync(file(`${uuidA}.jsonl`), { force: true });
+    api.tmux('kill-session', '-t', idP);
+  }
+});
+
 test('the session list says how full each Claude conversation is', async () => {
   const answer = (input, read, write, model = 'claude-opus-5-5', extra = {}) => ({ type: 'assistant', timestamp: stamp(), ...extra,
     message: { role: 'assistant', model, content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: input, cache_read_input_tokens: read, cache_creation_input_tokens: write, output_tokens: 999 } } });
